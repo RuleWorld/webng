@@ -1,4 +1,5 @@
 import sys, yaml
+from yaml import Loader
 from webng.analysis import weAverage, weEvolution, weCluster, weNetwork
 
 
@@ -15,7 +16,7 @@ class weAnalysis:
 
     def __init__(self, args) -> None:
         with open(args.opts, "r") as f:
-            opt_dict = yaml.load(f)
+            opt_dict = yaml.load(f,Loader=Loader)
         self.opts = opt_dict
 
     def _getd(self, dic, key, default=None, required=True):

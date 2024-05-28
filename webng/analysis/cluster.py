@@ -191,6 +191,7 @@ class weCluster(weAnalysis):
         self.pcca = pgp.GPCCA(self.tm, z="LM", method="brandts")
         print(self.pcca.minChi(self.cluster_count, dims))
         self.pcca.optimize({"m_min": self.cluster_count, "m_max": dims})
+        print("##### Opimtized #####")
         self.p = self.pcca.coarse_grained_stationary_probability
         self.ctm = self.pcca.coarse_grained_transition_matrix
         self.assignments = []
