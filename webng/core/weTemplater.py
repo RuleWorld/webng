@@ -133,7 +133,8 @@ class weTemplater:
                     "transition-matrix": None,  # default, make a new one
                     "assignments": None,  # default, make a new one
                     "metastable-states-file": None,  # default, metasble_assignments.pkl
-                    "cluster-count": 2,  # default, 2, require the cluster count
+                    "min-cluster-count": 2,  # default, 2, require the cluster count
+                    "max-cluster-count": None, # default, either min-cluster-count has the definitive cluster count or a range is given
                     "normalize": None,  # default false
                     "symmetrize": None,  # default true
                     "states": [

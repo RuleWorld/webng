@@ -43,8 +43,9 @@ class weCluster(weAnalysis):
             default="metasble_assignments.pkl",
             required=False,
         )
-        # Cluster count
-        self.cluster_count = self._getd(opts, "cluster-count")
+        # Cluster count s
+        self.min_cluster_count = self._getd(opts, "min-cluster-count")
+        self.max_cluster_count = self._getd(opts, "max-cluster-count")
         # Do we symmetrize
         self.symmetrize = self._getd(opts, "symmetrize", default=True, required=False)
         # normalize data so results are in %s
@@ -187,10 +188,19 @@ class weCluster(weAnalysis):
         """ """
         print("##### Clustering #####")
         self.preprocess_tm()
-        dims = self.tm.shape[0]
         self.pcca = pgp.GPCCA(self.tm, z="LM", method="brandts")
-        print(self.pcca.minChi(self.cluster_count, dims))
-        self.pcca.optimize({"m_min": self.cluster_count, "m_max": dims})
+
+        # minchi = self.pcca.minChi(self.cluster_count, dims)
+        # print(minchi)
+        # print(len(minchi))
+        # print(f'Optimal number of clusters = {minchi.index(max(minchi)) + 2}')
+        # self.pcca.optimize({"m_min": self.cluster_count, "m_max": dims})
+        
+        if self.max_cluster_count == None:
+            self.pcca.optimize(self.min_cluster_count)
+        else:
+            self.pcca.optimize({"m_min": self.min_cluster_count, "m_max": self.max_cluster_count})
+
         print("##### Opimtized #####")
         self.p = self.pcca.coarse_grained_stationary_probability
         self.ctm = self.pcca.coarse_grained_transition_matrix
