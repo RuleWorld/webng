@@ -391,7 +391,7 @@ class weConvert:
             "        i = np.loadtxt('bngl_conf/init.gdat')\n",
             "        centers[0] = i[0,1:]\n",
             "        self.bin_mapper = VoronoiBinMapper(dfunc, centers)\n",
-            "        self.bin_target_counts = np.empty((self.bin_mapper.nbins,), np.int)\n",
+            "        self.bin_target_counts = np.empty((self.bin_mapper.nbins,), int)\n",
             "        self.bin_target_counts[...] = {}\n".format(self.traj_per_bin),
         ]
 
