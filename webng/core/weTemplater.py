@@ -108,6 +108,7 @@ class weTemplater:
                     "dimensions": None,
                     "output": "average.png",
                     "smoothing": 0.5,
+                    "color_bar": True,
                     "plot-opts": {
                         "name-font-size": 12,
                         "voronoi-lw": 1,
