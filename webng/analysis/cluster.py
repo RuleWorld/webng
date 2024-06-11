@@ -43,9 +43,9 @@ class weCluster(weAnalysis):
             default="metasble_assignments.pkl",
             required=False,
         )
-        # Cluster count s
-        self.min_cluster_count = self._getd(opts, "min-cluster-count")
-        self.max_cluster_count = self._getd(opts, "max-cluster-count")
+        # Cluster counts
+        self.min_cluster_count = self._getd(opts, "min-cluster-count", default=2, required=True)
+        self.max_cluster_count = self._getd(opts, "max-cluster-count", default=None, required=False)
         # Do we symmetrize
         self.symmetrize = self._getd(opts, "symmetrize", default=True, required=False)
         # normalize data so results are in %s
