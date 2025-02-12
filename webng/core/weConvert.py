@@ -413,7 +413,7 @@ class weConvert:
         else:
             bin_lines = [
                 "        centers = []",
-                "        for center in product(','.join([f'dim{dim}_points' for dim in range(self.pcoord_ndim)])):",
+                f"        for center in product({','.join([f'dim{dim}_points' for dim in range(self.dims)])}):",
                 "           centers.append(np.array(center))"
                 ]
             for dim in range(self.dims):
