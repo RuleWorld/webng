@@ -66,11 +66,17 @@ class weConvert:
         self.plen = self._getd(sampling_options, "pcoord_length")
         # binning options
         binning_options = self._getd(self.opts, "binning_options")
-        # At the moment I'm assuming a safe set of defaults?
-        self.traj_per_bin = self._getd(binning_options, "traj_per_bin", default=10)
-        self.block_size = self._getd(binning_options, "block_size", default=10)
-        self.center_freq = self._getd(binning_options, "center_freq", default=1)
-        self.max_centers = self._getd(binning_options, "max_centers", default=300)
+        self.binning_style = self._getd(binning_options, "style", default='adaptive')
+        if self.binning_style == 'adaptive':
+            self.traj_per_bin = self._getd(binning_options, "traj_per_bin", default=10)
+            self.block_size = self._getd(binning_options, "block_size", default=10)
+            self.center_freq = self._getd(binning_options, "center_freq", default=1)
+            self.max_centers = self._getd(binning_options, "max_centers", default=300)
+        else:
+            self.first_edge = self._getd(binning_options, "first_edge", default=0)
+            self.last_edge = self._getd(binning_options, "last_edge", default=50)
+            self.num_bins = self._getd(binning_options, "num_bins", default=10)
+            self.traj_per_bin = self._getd(binning_options, "traj_per_bin", default=10)
 
     def _load_yaml(self, yfile):
         """
@@ -373,37 +379,54 @@ class weConvert:
         the system.py where the bin mapper is defined, most binning options
         go here
         """
-        lines = [
-            "from __future__ import division, print_function; __metaclass__ = type\n",
-            "import numpy as np\n",
-            "import westpa\n",
-            "from westpa import WESTSystem\n",
-            "from westpa.core.binning import VoronoiBinMapper\n",
-            "from scipy.spatial.distance import cdist\n",
-            "import logging\n",
-            "log = logging.getLogger(__name__)\n",
-            "log.debug('loading module %r' % __name__)\n",
-            "def dfunc(p, centers):\n",
-            "    ds = cdist(np.array([p]),centers)\n",
-            "    return np.array(ds[0], dtype=p.dtype)\n",
-            "class System(WESTSystem):\n",
-            "    def initialize(self):\n",
-            "        self.pcoord_ndim = {}\n".format(self.dims),
-            "        self.pcoord_len = {}\n".format(self.plen + 1),
-            "        self.pcoord_dtype = np.float32\n",
-            "        self.nbins = 1\n",
-            "        centers = np.zeros((self.nbins,self.pcoord_ndim),dtype=self.pcoord_dtype)\n",
-            "        # Using the values from the inital point\n",
-            "        i = np.loadtxt('bngl_conf/init.gdat')\n",
-            "        centers[0] = i[0,1:]\n",
-            "        self.bin_mapper = VoronoiBinMapper(dfunc, centers)\n",
-            "        self.bin_target_counts = np.empty((self.bin_mapper.nbins,), int)\n",
-            "        self.bin_target_counts[...] = {}\n".format(self.traj_per_bin),
+        start_lines = [
+            "from __future__ import division, print_function; __metaclass__ = type",
+            "import numpy as np",
+            "import westpa",
+            "from westpa import WESTSystem",
+            "from westpa.core.binning import VoronoiBinMapper",
+            "from scipy.spatial.distance import cdist",
+            "import logging",
+            "from itertools import product",
+            "log = logging.getLogger(__name__)",
+            "log.debug('loading module %r' % __name__)",
+            "def dfunc(p, centers):",
+            "    ds = cdist(np.array([p]),centers)",
+            "    return np.array(ds[0], dtype=p.dtype)",
+            "class System(WESTSystem):",
+            "    def initialize(self):",
+            "        self.pcoord_ndim = {}".format(self.dims),
+            "        self.pcoord_len = {}".format(self.plen + 1)
         ]
-
-        f = open("system.py", "w")
-        f.writelines(lines)
-        f.close()
+        end_lines = [
+            "        self.bin_mapper = VoronoiBinMapper(dfunc, centers)",
+            "        self.bin_target_counts = np.empty((self.bin_mapper.nbins,), int)",
+            "        self.bin_target_counts[...] = {}".format(self.traj_per_bin),
+        ]
+        if self.binning_style == 'adaptive':
+            bin_lines = [
+                "        self.nbins = 1",
+                "        centers = np.zeros((self.nbins,self.pcoord_ndim),dtype=np.float32)",
+                "        i = np.loadtxt('bngl_conf/init.gdat')",
+                "        centers[0] = i[0,1:]"
+            ]
+        else:
+            bin_lines = [
+                "        centers = []",
+                "        for center in product(','.join([f'dim{dim}_points' for dim in range(self.pcoord_ndim)])):",
+                "           centers.append(np.array(center))"
+                ]
+            for dim in range(self.dims):
+                first_edge = self.first_edge[dim]
+                last_edge = self.last_edge[dim]
+                num_bins = self.num_bins[dim]
+                step_size = (last_edge - first_edge) / num_bins
+                first_center = first_edge + step_size / 2
+                last_center = last_edge - step_size / 2
+                bin_lines.insert(0,f"        dim{dim}_points = np.linspace({first_center},{last_center},{num_bins})")
+        full_text = "\n".join(["\n".join(start_lines),"\n".join(bin_lines),"\n".join(end_lines)])
+        with open("system.py", "w") as f:
+            f.write(full_text)
 
     def _write_westcfg(self):
         """
