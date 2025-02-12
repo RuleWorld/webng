@@ -86,7 +86,7 @@ class weBNGBase(cement.Controller):
                 {
                     "help": "The binning strategy used. 'adaptive' uses an adaptive voronoi binning scheme as described in Zhang 2010, J Chem Phys, 132. 'regular' constructs rectangular bins using voronoi centers (default: adaptive)",
                     "default": "adaptive",
-                    "choices": ['adaptive,regular'],
+                    "choices": ['adaptive','regular'],
                     "required": False,
                 },
             )

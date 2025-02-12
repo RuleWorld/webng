@@ -74,14 +74,22 @@ class weTemplater:
             self.inp_file = args.input
         self.out_file = args.output
         # setup a template dictionary
-        self.template_dict = {
-            "propagator_options": {"propagator_type": "libRoadRunner", "pcoords": None},
-            "binning_options": {
+        if args.bins == 'adaptive':
+            binning_dict = {
                 "block_size": 10,
                 "center_freq": 1,
                 "max_centers": 300,
                 "traj_per_bin": 100,
-            },
+            }
+        else:
+            binning_dict = {
+                "first_edge": [0],
+                "last_edge": [50],
+                "num_bins": [10]
+            }
+        self.template_dict = {
+            "propagator_options": {"propagator_type": "libRoadRunner", "pcoords": None},
+            "binning_options": binning_dict,
             "path_options": {
                 "WESTPA_path": None,
                 "bng_path": None,
