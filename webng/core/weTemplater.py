@@ -104,7 +104,7 @@ class weTemplater:
                 "dimensions": None,
                 "max_iter": 100,
                 "pcoord_length": 10,
-                "tau": 100,
+                "tau": 10,
             },
             "analyses": {
                 "enabled": False,
