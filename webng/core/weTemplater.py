@@ -76,16 +76,19 @@ class weTemplater:
         # setup a template dictionary
         if args.bins == 'adaptive':
             binning_dict = {
+                "style": 'adaptive',
                 "block_size": 10,
                 "center_freq": 1,
                 "max_centers": 300,
-                "traj_per_bin": 100,
+                "traj_per_bin": 10,
             }
         else:
             binning_dict = {
-                "first_edge": [0],
-                "last_edge": [50],
-                "num_bins": [10]
+                "style": 'regular',
+                "first_edge": 0,
+                "last_edge": 50,
+                "num_bins": 10,
+                "traj_per_bin": 10
             }
         self.template_dict = {
             "propagator_options": {"propagator_type": "libRoadRunner", "pcoords": None},
