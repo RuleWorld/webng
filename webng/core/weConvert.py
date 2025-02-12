@@ -443,6 +443,18 @@ class weConvert:
         step_len = self.tau / self.plen
         step_no = self.plen
 
+        if self.binning_style == 'adaptive':
+            insert = [
+                "    - plugin: westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver\n",
+                "      av_enabled: true\n",
+                "      dfunc_method: system.dfunc\n",
+                "      walk_count: {}\n".format(self.traj_per_bin),
+                "      max_centers: {}\n".format(self.max_centers),
+                "      center_freq: {}\n".format(self.center_freq),
+            ]
+        else:
+            insert = []
+
         lines = [
             "# vi: set filetype=yaml :\n",
             "---\n",
@@ -465,14 +477,7 @@ class weConvert:
             "        scaleoffset: 4\n",
             "      - name:        final_state \n",
             "        scaleoffset: 4\n",
-            "  plugins:\n",
-            "    - plugin: westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver\n",
-            "      av_enabled: true\n",
-            "      dfunc_method: system.dfunc\n",
-            "      walk_count: {}\n".format(self.traj_per_bin),
-            "      max_centers: {}\n".format(self.max_centers),
-            "      center_freq: {}\n".format(self.center_freq),
-            "    - plugin: restart_plugin.RestartDriver\n",
+            "  plugins:\n"] + insert + ["    - plugin: restart_plugin.RestartDriver\n",
             "  librr:\n",
             "    init:\n",
             "      model_file: {} # Generate this\n".format(
@@ -488,6 +493,18 @@ class weConvert:
             f.writelines(lines)
 
     def _executable_westcfg(self):
+        if self.binning_style == 'adaptive':
+            insert = [
+                "    - plugin: westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver\n",
+                "      av_enabled: true\n",
+                "      dfunc_method: system.dfunc\n",
+                "      walk_count: {}\n".format(self.traj_per_bin),
+                "      max_centers: {}\n".format(self.max_centers),
+                "      center_freq: {}\n".format(self.center_freq),
+            ]
+        else:
+            insert = []
+
         lines = [
             "# vi: set filetype=yaml :\n",
             "---\n",
@@ -510,14 +527,7 @@ class weConvert:
             "      segment:       $WEST_SIM_ROOT/traj_segs/{segment.n_iter:06d}/{segment.seg_id:06d}\n",
             "      basis_state:   $WEST_SIM_ROOT/bstates/{basis_state.auxref}\n",
             "      initial_state: $WEST_SIM_ROOT/istates/{initial_state.iter_created}/{initial_state.state_id}.rst\n",
-            "  plugins:\n",
-            "    - plugin: westext.adaptvoronoi.AdaptiveVoronoiDriver\n",
-            "      av_enabled: true\n",
-            "      dfunc_method: system.dfunc\n",
-            "      walk_count: {}\n".format(self.traj_per_bin),
-            "      max_centers: {}\n".format(self.max_centers),
-            "      center_freq: {}\n".format(self.center_freq),
-            "  executable:\n",
+            "  plugins:\n"] + insert + ["  executable:\n",
             "    environ:\n",
             "      PROPAGATION_DEBUG: 1\n",
             "    datasets:\n",
