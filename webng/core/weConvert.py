@@ -240,10 +240,11 @@ class weConvert:
         """
         # TODO: Add submission scripts for varied clusters
         # TODO: Add a hook to write any submission scripts?
-        lines = ["#!/bin/bash\n", 'w_run --work-manager processes "$@"\n']
+        lines = ["#!/bin/bash", 'w_run --work-manager processes "$@"']
 
+        full_text = "\n".join(lines)
         with open("run.sh", "w") as f:
-            f.writelines(lines)
+            f.write(full_text)
         os.chmod("run.sh", 0o764)
 
     def _write_envsh(self):
@@ -254,18 +255,19 @@ class weConvert:
             sys.exit("WESTPA path is not specified")
 
         lines = [
-            "#!/bin/sh\n",
-            'export WEST_SIM_ROOT="$PWD"\n',
-            "export SIM_NAME=$(basename $WEST_SIM_ROOT)\n",
+            "#!/bin/sh",
+            'export WEST_SIM_ROOT="$PWD"',
+            "export SIM_NAME=$(basename $WEST_SIM_ROOT)",
         ]
 
         if self.copy_run_net:
-            lines.append('export RunNet="$WEST_SIM_ROOT/bngl_conf/run_network"\n')
+            lines.append('export RunNet="$WEST_SIM_ROOT/bngl_conf/run_network"')
         else:
-            lines.append('export RunNet="{}/bin/run_network"\n'.format(self.bng_path))
+            lines.append('export RunNet="{}/bin/run_network"'.format(self.bng_path))
 
+        full_text = "\n".join(lines)
         with open("env.sh", "w") as f:
-            f.writelines(lines)
+            f.write(full_text)
         os.chmod("env.sh", 0o764)
 
     def _write_auxfuncs(self):
@@ -274,19 +276,19 @@ class weConvert:
         time in BNG output
         """
         lines = [
-            "#!/usr/bin/env python\n",
-            "import numpy\n",
-            "def pcoord_loader(fieldname, coord_filename, segment, single_point=False):\n",
-            "    pcoord    = numpy.loadtxt(coord_filename, dtype = numpy.float32)\n",
-            "    if not single_point:\n",
-            "        segment.pcoord = pcoord[:,1:]\n",
-            "    else:\n",
+            "#!/usr/bin/env python",
+            "import numpy",
+            "def pcoord_loader(fieldname, coord_filename, segment, single_point=False):",
+            "    pcoord    = numpy.loadtxt(coord_filename, dtype = numpy.float32)",
+            "    if not single_point:",
+            "        segment.pcoord = pcoord[:,1:]",
+            "    else:",
             "        segment.pcoord = pcoord[1:]",
         ]
 
-        f = open("aux_functions.py", "w")
-        f.writelines(lines)
-        f.close()
+        full_text = "\n".join(lines)
+        with open("aux_functions.py", "w") as f:
+            f.write(full_text)
 
     def _write_bstatestxt(self):
         """
@@ -305,19 +307,20 @@ class weConvert:
         """
         lines = [
             "#!/bin/bash\n",
-            'if [ -n "$SEG_DEBUG" ] ; then\n',
-            "  set -x\n",
-            "  env | sort\n",
-            "fi\n",
-            "cd $WEST_SIM_ROOT\n",
-            "cat bngl_conf/init.gdat > $WEST_PCOORD_RETURN\n",
-            'if [ -n "$SEG_DEBUG" ] ; then\n',
-            "  head -v $WEST_PCOORD_RETURN\n",
-            "fi\n",
+            'if [ -n "$SEG_DEBUG" ] ; then',
+            "  set -x",
+            "  env | sort",
+            "fi",
+            "cd $WEST_SIM_ROOT",
+            "cat bngl_conf/init.gdat > $WEST_PCOORD_RETURN",
+            'if [ -n "$SEG_DEBUG" ] ; then',
+            "  head -v $WEST_PCOORD_RETURN",
+            "fi",
         ]
 
+        full_text = "\n".join(lines)
         with open("westpa_scripts/get_pcoord.sh", "w") as f:
-            f.writelines(lines)
+            f.write(full_text)
         os.chmod("westpa_scripts/get_pcoord.sh", 0o764)
 
     def _write_postiter(self):
@@ -326,21 +329,22 @@ class weConvert:
         older than 3 iterations
         """
         lines = [
-            "#!/bin/bash\n",
-            'if [ -n "$SEG_DEBUG" ] ; then\n',
-            "    set -x\n",
-            "    env | sort\n",
-            "fi\n",
-            "cd $WEST_SIM_ROOT || exit 1\n",
-            "if [[ $WEST_CURRENT_ITER -gt 3 ]];then\n",
-            '  PREV_ITER=$(printf "%06d" $((WEST_CURRENT_ITER-3)))\n',
-            "  rm -rf ${WEST_SIM_ROOT}/traj_segs/${PREV_ITER}\n",
-            "  rm -f  seg_logs/${PREV_ITER}-*.log\n",
-            "fi\n",
+            "#!/bin/bash",
+            'if [ -n "$SEG_DEBUG" ] ; then',
+            "    set -x",
+            "    env | sort",
+            "fi",
+            "cd $WEST_SIM_ROOT || exit 1",
+            "if [[ $WEST_CURRENT_ITER -gt 3 ]];then",
+            '  PREV_ITER=$(printf "%06d" $((WEST_CURRENT_ITER-3)))',
+            "  rm -rf ${WEST_SIM_ROOT}/traj_segs/${PREV_ITER}",
+            "  rm -f  seg_logs/${PREV_ITER}-*.log",
+            "fi",
         ]
 
+        full_text = "\n".join(lines)
         with open("westpa_scripts/post_iter.sh", "w") as f:
-            f.writelines(lines)
+            f.write(full_text)
         os.chmod("westpa_scripts/post_iter.sh", 0o764)
 
     def _write_initsh(self, traj=True):
@@ -349,30 +353,31 @@ class weConvert:
         """
         if traj:
             lines = [
-                "#!/bin/bash\n",
-                "source env.sh\n",
-                "rm -rf traj_segs seg_logs istates west.h5 \n",
-                "mkdir   seg_logs traj_segs \n",
-                "cp $WEST_SIM_ROOT/bngl_conf/init.net bstates/0.net\n",
-                'BSTATE_ARGS="--bstate-file bstates/bstates.txt"\n',
+                "#!/bin/bash",
+                "source env.sh",
+                "rm -rf traj_segs seg_logs istates west.h5 ",
+                "mkdir   seg_logs traj_segs",
+                "cp $WEST_SIM_ROOT/bngl_conf/init.net bstates/0.net",
+                'BSTATE_ARGS="--bstate-file bstates/bstates.txt"',
                 'w_init $BSTATE_ARGS --segs-per-state {} --work-manager=threads "$@"'.format(
                     self.traj_per_bin
                 ),
             ]
         else:
             lines = [
-                "#!/bin/bash\n",
-                "source env.sh\n",
-                "rm -rf istates west.h5\n",
-                "cp $WEST_SIM_ROOT/bngl_conf/init.net bstates/0.net\n",
-                'BSTATE_ARGS="--bstate-file bstates/bstates.txt"\n',
+                "#!/bin/bash",
+                "source env.sh",
+                "rm -rf istates west.h5",
+                "cp $WEST_SIM_ROOT/bngl_conf/init.net bstates/0.net",
+                'BSTATE_ARGS="--bstate-file bstates/bstates.txt"',
                 'w_init $BSTATE_ARGS --segs-per-state {} --work-manager=threads "$@"'.format(
                     self.traj_per_bin
                 ),
             ]
 
+        full_text = "\n".join(lines)
         with open("init.sh", "w") as f:
-            f.writelines(lines)
+            f.write(full_text)
         os.chmod("init.sh", 0o764)
 
     def _write_systempy(self):
@@ -445,124 +450,126 @@ class weConvert:
 
         if self.binning_style == 'adaptive':
             insert = [
-                "    - plugin: westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver\n",
-                "      av_enabled: true\n",
-                "      dfunc_method: system.dfunc\n",
-                "      walk_count: {}\n".format(self.traj_per_bin),
-                "      max_centers: {}\n".format(self.max_centers),
-                "      center_freq: {}\n".format(self.center_freq),
+                "    - plugin: westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver",
+                "      av_enabled: true",
+                "      dfunc_method: system.dfunc",
+                "      walk_count: {}".format(self.traj_per_bin),
+                "      max_centers: {}".format(self.max_centers),
+                "      center_freq: {}".format(self.center_freq),
             ]
         else:
             insert = []
 
         lines = [
-            "# vi: set filetype=yaml :\n",
-            "---\n",
-            "west: \n",
-            "  system:\n",
-            "    driver: system.System\n",
-            "    module_path: $WEST_SIM_ROOT\n",
-            "  propagation:\n",
-            "    max_total_iterations: {}\n".format(self.max_iter),
-            "    max_run_wallclock:    72:00:00\n",
-            "    propagator:           libRR_propagator.librrPropagator \n",
-            "    gen_istates:          false\n",
-            "    block_size:           {}\n".format(self.block_size),
+            "# vi: set filetype=yaml :",
+            "---",
+            "west:",
+            "  system:",
+            "    driver: system.System",
+            "    module_path: $WEST_SIM_ROOT",
+            "  propagation:",
+            "    max_total_iterations: {}".format(self.max_iter),
+            "    max_run_wallclock:    72:00:00",
+            "    propagator:           libRR_propagator.librrPropagator ",
+            "    gen_istates:          false",
+            "    block_size:           {}".format(self.block_size),
             "  data:\n",
-            "    west_data_file: west.h5\n",
-            "    datasets:\n",
-            "      - name:        pcoord\n",
-            "        scaleoffset: 4\n",
-            "      - name:        seed\n",
-            "        scaleoffset: 4\n",
-            "      - name:        final_state \n",
-            "        scaleoffset: 4\n",
-            "  plugins:\n"] + insert + ["    - plugin: restart_plugin.RestartDriver\n",
-            "  librr:\n",
-            "    init:\n",
-            "      model_file: {} # Generate this\n".format(
+            "    west_data_file: west.h5",
+            "    datasets:",
+            "      - name:        pcoord",
+            "        scaleoffset: 4",
+            "      - name:        seed",
+            "        scaleoffset: 4",
+            "      - name:        final_state",
+            "        scaleoffset: 4",
+            "  plugins:\n"] + insert + ["    - plugin: restart_plugin.RestartDriver",
+            "  librr:",
+            "    init:",
+            "      model_file: {} # Generate this".format(
                 os.path.join(self.main_dir, self.fname, "bngl_conf", "init.xml")
             ),
-            "      init_time_step: 0\n",
-            "      final_time_step: {}\n".format(self.tau),
-            "      num_time_step: {}\n".format(step_no + 1),
-            "    data:\n",
-            "      pcoords: {}\n".format(('["' + '","'.join(self.pcoord_list) + '"]')),
+            "      init_time_step: 0",
+            "      final_time_step: {}".format(self.tau),
+            "      num_time_step: {}".format(step_no + 1),
+            "    data:",
+            "      pcoords: {}".format(('["' + '","'.join(self.pcoord_list) + '"]')),
         ]  # TODO: Write pcoords
+
+        full_text = "\n".join(lines)
         with open("west.cfg", "w") as f:
-            f.writelines(lines)
+            f.write(full_text)
 
     def _executable_westcfg(self):
         if self.binning_style == 'adaptive':
             insert = [
-                "    - plugin: westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver\n",
-                "      av_enabled: true\n",
-                "      dfunc_method: system.dfunc\n",
-                "      walk_count: {}\n".format(self.traj_per_bin),
-                "      max_centers: {}\n".format(self.max_centers),
-                "      center_freq: {}\n".format(self.center_freq),
+                "    - plugin: westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver",
+                "      av_enabled: true",
+                "      dfunc_method: system.dfunc",
+                "      walk_count: {}".format(self.traj_per_bin),
+                "      max_centers: {}".format(self.max_centers),
+                "      center_freq: {}".format(self.center_freq),
             ]
         else:
             insert = []
 
         lines = [
-            "# vi: set filetype=yaml :\n",
-            "---\n",
-            "west: \n",
-            "  system:\n",
-            "    driver: system.System\n",
-            "    module_path: $WEST_SIM_ROOT\n",
-            "  propagation:\n",
-            "    max_total_iterations: {}\n".format(self.max_iter),
-            "    max_run_wallclock:    72:00:00\n",
-            "    propagator:           executable\n",
-            "    gen_istates:          false\n",
-            "    block_size:           {}\n".format(self.block_size),
-            "  data:\n",
-            "    west_data_file: west.h5\n",
-            "    datasets:\n",
-            "      - name:        pcoord\n",
-            "        scaleoffset: 4\n",
+            "# vi: set filetype=yaml :",
+            "---",
+            "west:",
+            "  system:",
+            "    driver: system.System",
+            "    module_path: $WEST_SIM_ROOT",
+            "  propagation:",
+            "    max_total_iterations: {}".format(self.max_iter),
+            "    max_run_wallclock:    72:00:00",
+            "    propagator:           executable",
+            "    gen_istates:          false",
+            "    block_size:           {}".format(self.block_size),
+            "  data:",
+            "    west_data_file: west.h5",
+            "    datasets:",
+            "      - name:        pcoord",
+            "        scaleoffset: 4",
             "    data_refs:\n",
-            "      segment:       $WEST_SIM_ROOT/traj_segs/{segment.n_iter:06d}/{segment.seg_id:06d}\n",
-            "      basis_state:   $WEST_SIM_ROOT/bstates/{basis_state.auxref}\n",
-            "      initial_state: $WEST_SIM_ROOT/istates/{initial_state.iter_created}/{initial_state.state_id}.rst\n",
-            "  plugins:\n"] + insert + ["  executable:\n",
-            "    environ:\n",
-            "      PROPAGATION_DEBUG: 1\n",
-            "    datasets:\n",
-            "      - name:    pcoord\n",
-            "        loader:  aux_functions.pcoord_loader\n",
-            "        enabled: true\n",
-            "    propagator:\n",
-            "      executable: $WEST_SIM_ROOT/westpa_scripts/runseg.sh\n",
-            "      stdout:     $WEST_SIM_ROOT/seg_logs/{segment.n_iter:06d}-{segment.seg_id:06d}.log\n",
-            "      stderr:     stdout\n",
-            "      stdin:      null\n",
-            "      cwd:        null\n",
-            "      environ:\n",
-            "        SEG_DEBUG: 1\n",
-            "    get_pcoord:\n",
-            "      executable: $WEST_SIM_ROOT/westpa_scripts/get_pcoord.sh\n",
-            "      stdout:     /dev/null \n",
-            "      stderr:     stdout\n",
-            "    gen_istate:\n",
-            "      executable: $WEST_SIM_ROOT/westpa_scripts/gen_istate.sh\n",
-            "      stdout:     /dev/null \n",
-            "      stderr:     stdout\n",
-            "    post_iteration:\n",
-            "      enabled:    true\n",
-            "      executable: $WEST_SIM_ROOT/westpa_scripts/post_iter.sh\n",
-            "      stderr:     stdout\n",
-            "    pre_iteration:\n",
-            "      enabled:    false\n",
-            "      executable: $WEST_SIM_ROOT/westpa_scripts/pre_iter.sh\n",
-            "      stderr:     stdout\n",
+            "      segment:       $WEST_SIM_ROOT/traj_segs/{segment.n_iter:06d}/{segment.seg_id:06d}",
+            "      basis_state:   $WEST_SIM_ROOT/bstates/{basis_state.auxref}",
+            "      initial_state: $WEST_SIM_ROOT/istates/{initial_state.iter_created}/{initial_state.state_id}.rst",
+            "  plugins:\n"] + insert + ["  executable:",
+            "    environ:",
+            "      PROPAGATION_DEBUG: 1",
+            "    datasets:",
+            "      - name:    pcoord",
+            "        loader:  aux_functions.pcoord_loader",
+            "        enabled: true",
+            "    propagator:",
+            "      executable: $WEST_SIM_ROOT/westpa_scripts/runseg.sh",
+            "      stdout:     $WEST_SIM_ROOT/seg_logs/{segment.n_iter:06d}-{segment.seg_id:06d}.log",
+            "      stderr:     stdout",
+            "      stdin:      null",
+            "      cwd:        null",
+            "      environ:",
+            "        SEG_DEBUG: 1",
+            "    get_pcoord:",
+            "      executable: $WEST_SIM_ROOT/westpa_scripts/get_pcoord.sh",
+            "      stdout:     /dev/null ",
+            "      stderr:     stdout",
+            "    gen_istate:",
+            "      executable: $WEST_SIM_ROOT/westpa_scripts/gen_istate.sh",
+            "      stdout:     /dev/null",
+            "      stderr:     stdout",
+            "    post_iteration:",
+            "      enabled:    true",
+            "      executable: $WEST_SIM_ROOT/westpa_scripts/post_iter.sh",
+            "      stderr:     stdout",
+            "    pre_iteration:",
+            "      enabled:    false",
+            "      executable: $WEST_SIM_ROOT/westpa_scripts/pre_iter.sh",
+            "      stderr:     stdout",
         ]
 
-        f = open("west.cfg", "w")
-        f.writelines(lines)
-        f.close()
+        full_text = "\n".join(lines)
+        with open("west.cfg", "w") as f:
+            f.write(full_text)
 
     def _write_runsegsh(self):
         """
@@ -575,50 +582,50 @@ class weConvert:
 
         lines = [
             "#!/bin/bash\n",
-            'if [ -n "$SEG_DEBUG" ] ; then\n',
-            "  set -x\n",
-            "  env | sort\n",
-            "fi\n",
-            "if [[ -n $SCRATCH ]];then\n",
-            "  mkdir -pv $WEST_CURRENT_SEG_DATA_REF\n",
-            "  mkdir -pv ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF\n",
-            "  cd ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF\n",
-            "else\n",
-            "  mkdir -pv $WEST_CURRENT_SEG_DATA_REF\n",
-            "  cd $WEST_CURRENT_SEG_DATA_REF\n",
-            "fi\n",
-            'if [ "$WEST_CURRENT_SEG_INITPOINT_TYPE" = "SEG_INITPOINT_CONTINUES" ]; then\n',
-            "  if [[ -n $SCRATCH ]];then\n",
-            "    cp $WEST_PARENT_DATA_REF/seg_end.net ./parent.net\n",
-            "    cp $WEST_PARENT_DATA_REF/seg.gdat ./parent.gdat\n",
-            "  else\n",
-            "    ln -sv $WEST_PARENT_DATA_REF/seg_end.net ./parent.net\n",
-            "    ln -sv $WEST_PARENT_DATA_REF/seg.gdat ./parent.gdat\n",
-            "  fi\n",
-            "  $RunNet -o ./seg -p ssa -h $WEST_RAND16 --cdat 0 --fdat 0 -x -e -g ./parent.net ./parent.net {} {}\n".format(
+            'if [ -n "$SEG_DEBUG" ] ; then',
+            "  set -x",
+            "  env | sort",
+            "fi",
+            "if [[ -n $SCRATCH ]];then",
+            "  mkdir -pv $WEST_CURRENT_SEG_DATA_REF",
+            "  mkdir -pv ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF",
+            "  cd ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF",
+            "else",
+            "  mkdir -pv $WEST_CURRENT_SEG_DATA_REF",
+            "  cd $WEST_CURRENT_SEG_DATA_REF",
+            "fi",
+            'if [ "$WEST_CURRENT_SEG_INITPOINT_TYPE" = "SEG_INITPOINT_CONTINUES" ]; then',
+            "  if [[ -n $SCRATCH ]];then",
+            "    cp $WEST_PARENT_DATA_REF/seg_end.net ./parent.net",
+            "    cp $WEST_PARENT_DATA_REF/seg.gdat ./parent.gdat",
+            "  else",
+            "    ln -sv $WEST_PARENT_DATA_REF/seg_end.net ./parent.net",
+            "    ln -sv $WEST_PARENT_DATA_REF/seg.gdat ./parent.gdat",
+            "  fi",
+            "  $RunNet -o ./seg -p ssa -h $WEST_RAND16 --cdat 0 --fdat 0 -x -e -g ./parent.net ./parent.net {} {}".format(
                 step_len, step_no
             ),
-            "  tail -n 1 parent.gdat > $WEST_PCOORD_RETURN\n",
-            "  cat seg.gdat >> $WEST_PCOORD_RETURN\n",
-            'elif [ "$WEST_CURRENT_SEG_INITPOINT_TYPE" = "SEG_INITPOINT_NEWTRAJ" ]; then\n',
-            "  if [[ -n $SCRATCH ]];then\n",
-            "    cp $WEST_PARENT_DATA_REF ./parent.net\n",
-            "  else\n",
-            "    ln -sv $WEST_PARENT_DATA_REF ./parent.net\n",
-            "  fi\n",
-            "  $RunNet -o ./seg -p ssa -h $WEST_RAND16 --cdat 0 --fdat 0 -e -g ./parent.net ./parent.net {} {}\n".format(
+            "  tail -n 1 parent.gdat > $WEST_PCOORD_RETURN",
+            "  cat seg.gdat >> $WEST_PCOORD_RETURN",
+            'elif [ "$WEST_CURRENT_SEG_INITPOINT_TYPE" = "SEG_INITPOINT_NEWTRAJ" ]; then',
+            "  if [[ -n $SCRATCH ]];then",
+            "    cp $WEST_PARENT_DATA_REF ./parent.net",
+            "  else",
+            "    ln -sv $WEST_PARENT_DATA_REF ./parent.net",
+            "  fi",
+            "  $RunNet -o ./seg -p ssa -h $WEST_RAND16 --cdat 0 --fdat 0 -e -g ./parent.net ./parent.net {} {}".format(
                 step_len, step_no
             ),
-            "  cat seg.gdat > $WEST_PCOORD_RETURN\n",
-            "fi\n",
-            "if [[ -n $SCRATCH ]];then\n",
-            "  cp ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF/seg_end.net $WEST_CURRENT_SEG_DATA_REF/.\n",
-            "  rm -rf ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF\n",
-            "fi\n",
+            "  cat seg.gdat > $WEST_PCOORD_RETURN",
+            "fi",
+            "if [[ -n $SCRATCH ]];then",
+            "  cp ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF/seg_end.net $WEST_CURRENT_SEG_DATA_REF/.",
+            "  rm -rf ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF",
+            "fi"
         ]
-
+        full_text = "\n".join(lines)
         with open("westpa_scripts/runseg.sh", "w") as f:
-            f.writelines(lines)
+            f.write(full_text)
         os.chmod("westpa_scripts/runseg.sh", 0o764)
 
     def write_dynamic_files(self):
