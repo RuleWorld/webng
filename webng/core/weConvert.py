@@ -77,6 +77,7 @@ class weConvert:
             self.last_edge = self._getd(binning_options, "last_edge", default=50)
             self.num_bins = self._getd(binning_options, "num_bins", default=10)
             self.traj_per_bin = self._getd(binning_options, "traj_per_bin", default=10)
+            self.block_size = self._getd(binning_options, "block_size", default=10)
 
     def _load_yaml(self, yfile):
         """

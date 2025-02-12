@@ -88,7 +88,8 @@ class weTemplater:
                 "first_edge": 0,
                 "last_edge": 50,
                 "num_bins": 10,
-                "traj_per_bin": 10
+                "traj_per_bin": 10,
+                "block_size": 10
             }
         self.template_dict = {
             "propagator_options": {"propagator_type": "libRoadRunner", "pcoords": None},
