@@ -85,9 +85,9 @@ class weTemplater:
         else:
             binning_dict = {
                 "style": 'regular',
-                "first_edge": 0,
-                "last_edge": 50,
-                "num_bins": 10,
+                "first_edge": None,
+                "last_edge": None,
+                "num_bins": None,
                 "traj_per_bin": 10,
                 "block_size": 10
             }
@@ -215,6 +215,10 @@ class weTemplater:
         pcoords = self._get_pcoords()
         self.template_dict["propagator_options"]["pcoords"] = pcoords
         self.template_dict["sampling_options"]["dimensions"] = len(pcoords)
+        if self.template_dict["binning_options"]["style"] == "regular":
+            self.template_dict["binning_options"]["first_edge"] = [0] * len(pcoords)
+            self.template_dict["binning_options"]["last_edge"] = [50] * len(pcoords)
+            self.template_dict["binning_options"]["num_bins"] = [10] * len(pcoords)
         # # update analysis options as well
         # for an_key in self.template_dict["analyses"].keys():
         #     if an_key == "enabled":
