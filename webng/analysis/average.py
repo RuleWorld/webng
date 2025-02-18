@@ -184,7 +184,7 @@ class weAverage(weAnalysis):
                     if self.normalize:
                         axarr[ii, jj].set(adjustable="box", aspect="equal")
                     # plotting the diagonal, 1D plots
-                    axes_to_average = tuple(i for i in range(self.dims) if i != ii)
+                    axes_to_average = tuple(d for d in range(self.dims) if d != ii)
                     Hists = Hists.mean(axis=axes_to_average)
 
                     # Normalize the distribution, take -ln, zero out minimum point
@@ -209,7 +209,7 @@ class weAverage(weAnalysis):
                     # Set equal width height
                     if self.normalize:
                         axarr[ii, jj].set(adjustable="box", aspect="equal")
-                    axes_to_average = tuple(i for i in range(self.dims) if i != ii and i != jj)
+                    axes_to_average = tuple(d for d in range(self.dims) if d != ii and d != jj)
                     Hists = Hists.mean(axis=axes_to_average)
                     Hists = Hists / (Hists.sum())
                     # Hists = -np.log(Hists)
