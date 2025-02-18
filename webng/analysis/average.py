@@ -256,8 +256,7 @@ class weAverage(weAnalysis):
                     if self.color_bar:
                         f.colorbar(
                             pcolormesh,
-                            ax=axarr[ii, jj],
-                            label="probability"
+                            ax=axarr[ii, jj]
                         )
 
                     # Plot vornoi bins if asked
