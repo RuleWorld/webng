@@ -121,18 +121,20 @@ class weAverage(weAnalysis):
         return
 
     def run(self, ext=None):
-        proc = sbpc.Popen(
-                [
-                    "w_pdist",
-                    "-W",
-                    "{}".format(self.h5file_path),
-                    "-o",
-                    "pdist.h5",
-                    "-b",
-                    "30"
-                ]
-            )
-        proc.wait()
+        if not os.path.isfile("pdist.h5"):
+            print("pdist.h5 does not exist. Running w_pdist")
+            proc = sbpc.Popen(
+                    [
+                        "w_pdist",
+                        "-W",
+                        "{}".format(self.h5file_path),
+                        "-o",
+                        "pdist.h5",
+                        "-b",
+                        "30"
+                    ]
+                )
+            proc.wait()
 
         first_iter, last_iter = self.first_iter, self.last_iter
         datFile = h5py.File("pdist.h5", "r")
