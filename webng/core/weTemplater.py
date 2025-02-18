@@ -134,6 +134,7 @@ class weTemplater:
                     "dimensions": None,
                     "output": "evolution.png",
                     "avg_window": 1,
+                    "color_bar": False,
                     "plot-opts": {
                         "name-font-size": 12,
                     },
