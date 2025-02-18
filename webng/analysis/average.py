@@ -101,6 +101,7 @@ class weAverage(weAnalysis):
         # plt.figure(figsize=(20,20))
         plt.figure(figsize=(1.5, 1.5))
         f, axarr = plt.subplots(self.dims, self.dims)
+        axarr = np.atleast_2d(axarr)
         f.subplots_adjust(
             hspace=0.4, wspace=0.4, bottom=0.05, left=0.05, top=0.98, right=0.9
         )
@@ -119,54 +120,23 @@ class weAverage(weAnalysis):
         plt.close()
         return
 
-    def open_pdist_file(self, fdim, sdim):
-        # TODO: Rewrite so that it uses w_pdist directly and we can avoid using
-        # --construct-dataset and remove the dependency on assignment.py here
-        pfile = os.path.join(self.work_path, "pdist_{}_{}.h5".format(fdim, sdim))
-        # for now let's just get it working
-        try:
-            if not os.path.isfile(pfile):
-                raise IOError
-            open_file = h5py.File(pfile, "r")
-            return open_file
-        except IOError:
-            print(
-                "Cannot open pdist file for {} vs {}, calling w_pdist".format(
-                    fdim, sdim
-                )
-            )
-            # We are assuming we don't have the file now
-            # TODO: Expose # of bins somewhere, this is REALLY hacky,
-            # I need to fiddle with w_pdist to fix it up
-
-            # we need to have assignment.py for w_pdist to work
-            # TODO: Try to make it use utils.pull data instead
-            with open("assignment.py", "w") as f:
-                f.write(self.pull_data_str)
-
-            with open("data_to_pull.txt", "w") as f:
-                f.write("{} {}".format(fdim, sdim))
-
-            proc = sbpc.Popen(
+    def run(self, ext=None):
+        proc = sbpc.Popen(
                 [
                     "w_pdist",
                     "-W",
                     "{}".format(self.h5file_path),
                     "-o",
-                    "{}".format(pfile),
+                    "pdist.h5",
                     "-b",
-                    "30",
-                    "--construct-dataset",
-                    "assignment.pull_data",
+                    "30"
                 ]
             )
-            proc.wait()
-            assert proc.returncode == 0, "w_pdist call failed, exiting"
-            open_file = h5py.File(pfile, "r")
-            return open_file
+        proc.wait()
 
-    def run(self, ext=None):
         first_iter, last_iter = self.first_iter, self.last_iter
+        datFile = h5py.File("pdist.h5", "r")
+
         if "plot-opts" in self.opts:
             plot_opts = self.opts["plot-opts"]
             name_fsize = self._getd(plot_opts, "name-font-size", default=6)
@@ -176,14 +146,14 @@ class weAverage(weAnalysis):
 
         f, axarr = self.setup_figure()
         # Loop over every dimension vs every other dimension
-        # TODO: We could just not plot the lower triangle and
-        # save time and simplify code
 
         # for ii, jj in itt.product(range(self.dims), range(self.dims)):
         for jj in range(self.dims):
             for ii in range(jj,self.dims):
+                Hists = datFile["histograms"][first_iter:last_iter]
+                Hists = Hists.mean(axis=0)
+
                 print("Plotting {} vs {}".format((ii + 1), (jj + 1)))
-                inv = False
                 fi, fj = ii + 1, jj + 1
 
                 # It's too messy to plot the spines and ticks for large dimensions
@@ -212,39 +182,19 @@ class weAverage(weAnalysis):
                     if self.normalize:
                         axarr[ii, jj].set(adjustable="box", aspect="equal")
                     # plotting the diagonal, 1D plots
-                    if fi != self.dims:
-                        # First pull a file that contains the dimension
-                        pfile = os.path.join(
-                            self.work_path, "pdist_{}_{}.h5".format(fi, self.dims)
-                        )
-                        datFile = self.open_pdist_file(fi, self.dims)
-                        Hists = datFile["histograms"][first_iter:last_iter]
-                        # Get average and average the other dimension
-                        Hists = Hists.mean(axis=0)
-                        Hists = Hists.mean(axis=1)
-                    else:
-                        # We just need one that contains the last dimension
-                        pfile = os.path.join(
-                            self.work_path, "pdist_{}_{}.h5".format(1, self.dims)
-                        )
-                        datFile = self.open_pdist_file(1, self.dims)
-                        Hists = datFile["histograms"][first_iter:last_iter]
-                        # Average the correct dimension here
-                        Hists = Hists.mean(axis=0)
-                        Hists = Hists.mean(axis=0)
+                    axes_to_average = tuple(i for i in range(self.dims) if i != ii)
+                    Hists = Hists.mean(axis=axes_to_average)
 
                     # Normalize the distribution, take -ln, zero out minimum point
                     Hists = Hists / (Hists.flatten().sum())
-                    Hists = Hists / Hists.max()
+                    # Why was this line even here??
+                    # Hists = Hists / Hists.max()
                     if self.do_energy:
                         Hists = -np.log(Hists)
                     # Hists = Hists - Hists.min()
 
                     # Calculate the x values, normalize s.t. it spans 0-1
-                    x_bins = datFile["binbounds_0"][...]
-                    x_mids = np.array(
-                        [(x_bins[i] + x_bins[i + 1]) / 2.0 for i in range(len(x_bins) - 1)]
-                    )
+                    x_mids = datFile["midpoints_{}".format(ii)][...]
                     if self.normalize:
                         x_mids = x_mids / x_bins.max()
 
@@ -254,22 +204,11 @@ class weAverage(weAnalysis):
                         axarr[ii, jj].set_ylim(0.0, 1.0)
                     axarr[ii, jj].plot(x_mids, Hists, label="{} {}".format(fi, fj))
                 else:
-                    # Set equal widht height
+                    # Set equal width height
                     if self.normalize:
                         axarr[ii, jj].set(adjustable="box", aspect="equal")
-                    # Plotting off-diagonal, plotting 2D heatmaps
-                    if fi < fj:
-                        datFile = self.open_pdist_file(fi, fj)
-                        inv = False
-                    else:
-                        datFile = self.open_pdist_file(fj, fi)
-                        inv = True
-
-                    # Get average histograms over iterations,
-                    # take -ln of the histogram after normalizing
-                    # and set minimum to 0
-                    Hists = datFile["histograms"][first_iter:last_iter]
-                    Hists = Hists.mean(axis=0)
+                    axes_to_average = tuple(i for i in range(self.dims) if i != ii and i != jj)
+                    Hists = Hists.mean(axis=axes_to_average)
                     Hists = Hists / (Hists.sum())
                     # Hists = -np.log(Hists)
                     # Hists = Hists - Hists.min()
@@ -287,21 +226,16 @@ class weAverage(weAnalysis):
                     e_dist = Hists.T
 
                     # Get x/y bins, normalize them to 1 max
-                    x_bins = datFile["binbounds_0"][...]
+                    x_bins = datFile["midpoints_{}".format(ii)][...]
                     x_max = x_bins.max()
                     if self.normalize:
                         if x_max != 0:
                             x_bins = x_bins / x_max
-                    y_bins = datFile["binbounds_1"][...]
+                    y_bins = datFile["midpoints_{}".format(jj)][...]
                     y_max = y_bins.max()
                     if self.normalize:
                         if y_max != 0:
                             y_bins = y_bins / y_max
-
-                    # If we are at the other side of the diagonal line
-                    if not inv:
-                        e_dist = e_dist.T
-                        x_bins, y_bins = y_bins, x_bins
 
                     # Set certain values to white to avoid distractions
                     cmap = mpl.cm.magma_r
@@ -316,7 +250,7 @@ class weAverage(weAnalysis):
 
                     # Plot the heatmap
                     pcolormesh = axarr[ii, jj].pcolormesh(
-                        x_bins, y_bins, e_dist, cmap=cmap, vmin=1e-10
+                        y_bins, x_bins, e_dist, cmap=cmap, vmin=1e-10
                     )
 
                     if self.color_bar:
@@ -334,12 +268,8 @@ class weAverage(weAnalysis):
 
                         # Normalize to 1
                         if self.normalize:
-                            if not inv:
-                                X = X / x_max
-                                Y = Y / y_max
-                            else:
-                                X = X / y_max
-                                Y = Y / x_max
+                            X = X / y_max
+                            Y = Y / x_max
 
                         # Ensure not all X/Y values are 0
                         if not ((X == 0).all() or (Y == 0).all()):
