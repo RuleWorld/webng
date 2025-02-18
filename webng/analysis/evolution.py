@@ -69,13 +69,12 @@ class weEvolution(weAnalysis):
         # Setup the figure and names for each dimension
         # plt.figure(figsize=(20,20))
         plt.figure(figsize=(1.5, 3.0))
-        rows = int(self.dims / 2)
-        f, axarr = plt.subplots(rows, 2)
+        f, axarr = plt.subplots(1, self.dims)
         f.subplots_adjust(
             hspace=1.2, wspace=0.2, bottom=0.1, left=0.06, top=0.98, right=0.98
         )
-        if rows == 1:
-            axarr = np.array([axarr])
+        f.supxlabel("WE Iterations")
+        axarr = np.atleast_2d(axarr)
         return f, axarr
 
     def save_fig(self):
@@ -91,115 +90,70 @@ class weEvolution(weAnalysis):
         plt.close()
         return
 
-    def open_pdist_file(self, fdim):
-        # TODO: Rewrite so that it uses w_pdist directly and we can avoid using
-        # --construct-dataset and remove the dependency on assignment.py here
-        if fdim != self.dims:
-            pfile = os.path.join(
-                self.work_path, "pdist_{}_{}.h5".format(fdim, self.dims)
-            )
-        else:
-            pfile = os.path.join(self.work_path, "pdist_1_{}.h5".format(self.dims))
-        # for now let's just get it working
-        try:
-            if not os.path.isfile(pfile):
-                raise IOError
-            open_file = h5py.File(pfile, "r")
-            return open_file
-        except IOError:
-            print("Cannot open pdist file for {}, calling w_pdist".format(fdim))
-            # We are assuming we don't have the file now
-            # TODO: Expose # of bins somewhere, this is REALLY hacky,
-            # I need to fiddle with w_pdist to fix it up
-
-            # we need to have assignment.py for w_pdist to work
-            # TODO: Try to make it use utils.pull data instead
-            with open("assignment.py", "w") as f:
-                f.write(self.pull_data_str)
-
-            with open("data_to_pull.txt", "w") as f:
-                f.write("{} {}".format(fdim, self.dims))
-
-            proc = sbpc.call(
-                [
-                    "w_pdist",
-                    "-W",
-                    "{}".format(self.h5file_path),
-                    "-o",
-                    "{}".format(pfile),
-                    "-b",
-                    "30",
-                    "--construct-dataset",
-                    "assignment.pull_data",
-                ]
-            )
-            proc.wait()
-            assert proc.returncode == 0, "w_pdist call failed, exiting"
-            open_file = h5py.File(pfile, "r")
-            return open_file
-
     def run(self, ext=None):
-        f, axarr = self.setup_figure()
-        rows, cols = int(self.dims / 2), int(2)
+        if not os.path.isfile("pdist.h5"):
+            print("pdist.h5 does not exist. Running w_pdist")
+            proc = sbpc.Popen(
+                    [
+                        "w_pdist",
+                        "-W",
+                        "{}".format(self.h5file_path),
+                        "-o",
+                        "pdist.h5",
+                        "-b",
+                        "30"
+                    ]
+                )
+            proc.wait()
+
+        datFile = h5py.File("pdist.h5", "r")
 
         if "plot-opts" in self.opts:
             plot_opts = self.opts["plot-opts"]
             name_fsize = self._getd(plot_opts, "name-font-size", default=6)
 
+        f, axarr = self.setup_figure()
+
         # Loop over every dimension vs every other dimension
-        for ii, jj in itt.product(range(rows), range(cols)):
-            inv = False
-            cdim = ii * 2 + jj
-            print("Plotting dimension {}".format(cdim + 1))
+        for i in range(self.dims):
+            print("Plotting dimension {}".format(i + 1))
 
             # It's too messy to plot the spines and ticks for large dimensions
             for kw in ["top", "right"]:
-                axarr[ii, jj].spines[kw].set_visible(False)
-            axarr[ii, jj].tick_params(left=False, bottom=False)
+                axarr[0, i].spines[kw].set_visible(False)
+            axarr[0, i].tick_params(left=False, bottom=False)
 
             # Set the names
-            axarr[ii, jj].set_ylabel(self.names[cdim], fontsize=name_fsize)
-            if ii == ((self.dims / 2) - 1):
-                # set y label
-                axarr[ii, jj].set_xlabel("WE Iterations", fontsize=name_fsize)
+            axarr[0, i].set_ylabel(self.names[i], fontsize=name_fsize)
 
             # First pull a file that contains the dimension
-            datFile = self.open_pdist_file(cdim + 1)
-            if (cdim + 1) == self.dims:
-                inv = True
+            Hists = datFile["histograms"][:]
+            axes_to_average = tuple(d for d in range(1,self.dims+1) if d != i+1)
+            Hists = Hists.mean(axis=axes_to_average)
 
-            Hists = datFile["histograms"][:, :, :]
-            if inv:
-                Hists = Hists.mean(axis=1)
-            else:
-                Hists = Hists.mean(axis=2)
-
-            moving_avg = []
-            for starti in range(1, self.last_iter - self.avg_window):
-                prob = Hists[starti : starti + self.avg_window].mean(axis=0)
-                prob = prob / prob.sum()
-                if not self.do_energy:
-                    prob = prob / prob.max()
-                moving_avg.append(prob)
-            Hists = np.array(moving_avg)
+            # moving_avg = []
+            # for starti in range(1, self.last_iter - self.avg_window):
+            #     prob = Hists[starti : starti + self.avg_window].mean(axis=0)
+            #     prob = prob / prob.sum()
+            #     if not self.do_energy:
+            #         prob = prob / prob.max()
+            #     moving_avg.append(prob)
+            # Hists = np.array(moving_avg)
             if self.do_energy:
                 Hists = -np.log(Hists)
                 Hists = Hists - Hists.min()
 
             # Calculate the x values, normalize s.t. it spans 0-1
-            x_bins = datFile["binbounds_0"][...]
-            x_max = x_bins.max()
-            x_bins = x_bins / x_max
+            x_bins = datFile["midpoints_{}".format(i)][...]
 
             # Plot on the correct ax, set x limit
-            axarr[ii, jj].set_ylim(0.0, 1.0)
             cmap = mpl.cm.magma_r
             cmap.set_bad(color="white")
             cmap.set_over(color="white")
             cmap.set_under(color="white")
-
-            pcolormesh = axarr[ii, jj].pcolormesh(
-                range(0, self.last_iter - self.avg_window),
+            
+            pcolormesh = axarr[0, i].pcolormesh(
+                range(0, self.last_iter),
                 x_bins,
                 Hists.T,
                 cmap=cmap,
@@ -207,11 +161,10 @@ class weEvolution(weAnalysis):
             )
 
             if self.color_bar:
-                    f.colorbar(
-                        pcolormesh,
-                        ax=axarr[ii, jj],
-                        label="probability"
-                    )
+                f.colorbar(
+                    pcolormesh,
+                    ax=axarr[0, i]
+                )
 
         plt.tight_layout()
         self.save_fig()
