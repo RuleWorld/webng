@@ -101,7 +101,7 @@ class weEvolution(weAnalysis):
                         "-o",
                         "pdist.h5",
                         "-b",
-                        "30"
+                        "{}".format(self.bins)
                     ]
                 )
             proc.wait()

@@ -34,7 +34,7 @@ class weAnalysis:
                 work_path = analysis_dict["work-path"]
             else:
                 work_path = None
-            #
+            analysis_bins = analysis_dict["analysis_bins"]
             if self._getd(analysis_dict, "enabled", default=True):
                 # we should run the analyses we have
                 analysis_list = list(analysis_dict.keys())
@@ -46,6 +46,7 @@ class weAnalysis:
                         avg_dict["pcoords"] = self.opts["propagator_options"]["pcoords"]
                         avg_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         avg_dict["work-path"] = work_path
+                        avg_dict["bins"] = analysis_bins
                         weAverage(avg_dict).run()
                 if "evolution" in analysis_list:
                     evo_dict = analysis_dict["evolution"]
@@ -55,6 +56,7 @@ class weAnalysis:
                         evo_dict["pcoords"] = self.opts["propagator_options"]["pcoords"]
                         evo_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         evo_dict["work-path"] = work_path
+                        evo_dict["bins"] = analysis_bins
                         weEvolution(evo_dict).run()
                 if "cluster" in analysis_list:
                     clust_dict = analysis_dict["cluster"]

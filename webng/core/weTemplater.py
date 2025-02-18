@@ -108,6 +108,7 @@ class weTemplater:
             },
             "analyses": {
                 "enabled": False,
+                "analysis_bins": 30,
                 "work-path": None,
                 "average": {
                     "enabled": False,

@@ -54,6 +54,8 @@ class weAverage(weAnalysis):
         self.normalize = opts["normalize"]
         # get color bar option
         self.color_bar = opts["color_bar"]
+        # get analysis bins
+        self.bins = opts["bins"]
 
     def get_mapper(self, mapper_iter):
         # Gotta fix this behavior
@@ -131,7 +133,7 @@ class weAverage(weAnalysis):
                         "-o",
                         "pdist.h5",
                         "-b",
-                        "30"
+                        "{}".format(self.bins)
                     ]
                 )
             proc.wait()
