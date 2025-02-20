@@ -51,7 +51,7 @@ class weAverage(weAnalysis):
         # output name
         self.outname = self._getd(opts, "output", default="average.png", required=False)
         # data smoothing
-        self.data_smoothing_level = self._getd(opts, "smoothing", default=None, required=False)
+        self.data_smoothing_level = self._getd(opts, "smoothing", default=0.5, required=False)
         # data normalization to min/max
         self.normalize = self._getd(opts, "normalize", default=False, required=False)
         # get color bar option
@@ -94,7 +94,7 @@ class weAverage(weAnalysis):
 
     def set_iter_range(self, first_iter, last_iter):
         if first_iter is None:
-            first_iter = 0
+            first_iter = 1
         if last_iter is None:
             last_iter = self.h5file.attrs["west_current_iteration"] - 1
 
@@ -132,6 +132,10 @@ class weAverage(weAnalysis):
                         "w_pdist",
                         "-W",
                         "{}".format(self.h5file_path),
+                        "--first-iter",
+                        "{}".format(self.first_iter),
+                        "--last-iter",
+                        "{}".format(self.last_iter),
                         "-o",
                         "pdist.h5",
                         "-b",
