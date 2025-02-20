@@ -35,27 +35,29 @@ class weAverage(weAnalysis):
         self.h5file_path = os.path.join(opts["sim_name"], "west.h5")
         self.h5file = h5py.File(self.h5file_path, "r")
         # We can determine an iteration to pull the mapper from ourselves
-        self.get_mapper(opts["mapper-iter"])
+        self.get_mapper(self._getd(opts, "mapper-iter", default=None, required=False))
         # Set the dimensionality
-        self.set_dims(opts["dimensions"])
+        self.set_dims(self._getd(opts, "dimensions", required=False))
         # Voronoi or not
-        self.voronoi = opts["plot-voronoi"]
+        self.voronoi = self._getd(opts, "plot-voronoi", default=False, required=False)
         # Plotting energies or not?
-        self.do_energy = opts["plot-energy"]
+        self.do_energy = self._getd(opts, "plot-energy", default=False, required=False)
         # iterations
+        self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
+        self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
         self.first_iter, self.last_iter = self.set_iter_range(
-            opts["first-iter"], opts["last-iter"]
+            self.first_iter, self.last_iter
         )
         # output name
-        self.outname = opts["output"]
+        self.outname = self._getd(opts, "output", default="average.png", required=False)
         # data smoothing
-        self.data_smoothing_level = opts["smoothing"]
+        self.data_smoothing_level = self._getd(opts, "smoothing", default=None, required=False)
         # data normalization to min/max
-        self.normalize = opts["normalize"]
+        self.normalize = self._getd(opts, "normalize", default=False, required=False)
         # get color bar option
-        self.color_bar = opts["color_bar"]
+        self.color_bar = self._getd(opts, "color_bar", default=True, required=False)
         # get analysis bins
-        self.bins = opts["bins"]
+        self.bins = self._getd(opts, "bins", default=30, required=False)
 
     def get_mapper(self, mapper_iter):
         # Gotta fix this behavior
