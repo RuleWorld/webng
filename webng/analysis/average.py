@@ -159,7 +159,7 @@ class weAverage(weAnalysis):
         # for ii, jj in itt.product(range(self.dims), range(self.dims)):
         for jj in range(self.dims):
             for ii in range(jj,self.dims):
-                Hists = datFile["histograms"][self.first_iter:self.last_iter]
+                Hists = datFile["histograms"][:]
                 Hists = Hists.mean(axis=0)
 
                 print("Plotting {} vs {}".format((ii + 1), (jj + 1)))
