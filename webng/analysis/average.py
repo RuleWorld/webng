@@ -144,7 +144,6 @@ class weAverage(weAnalysis):
                 )
             proc.wait()
 
-        first_iter, last_iter = self.first_iter, self.last_iter
         datFile = h5py.File("pdist.h5", "r")
 
         if "plot-opts" in self.opts:
@@ -160,7 +159,7 @@ class weAverage(weAnalysis):
         # for ii, jj in itt.product(range(self.dims), range(self.dims)):
         for jj in range(self.dims):
             for ii in range(jj,self.dims):
-                Hists = datFile["histograms"][first_iter:last_iter]
+                Hists = datFile["histograms"][self.first_iter:self.last_iter]
                 Hists = Hists.mean(axis=0)
 
                 print("Plotting {} vs {}".format((ii + 1), (jj + 1)))
