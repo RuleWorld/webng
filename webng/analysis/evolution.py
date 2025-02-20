@@ -143,7 +143,7 @@ class weEvolution(weAnalysis):
             axarr[0, i].set_ylabel(self.names[i], fontsize=name_fsize)
 
             # First pull a file that contains the dimension
-            Hists = datFile["histograms"][self.first_iter-1:self.last_iter]
+            Hists = datFile["histograms"][:]
             axes_to_average = tuple(d for d in range(1,self.dims+1) if d != i+1)
             Hists = Hists.mean(axis=axes_to_average)
 
