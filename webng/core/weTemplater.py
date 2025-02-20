@@ -132,6 +132,8 @@ class weTemplater:
                     "enabled": False,
                     "plot-energy": False,
                     "normalize": False,
+                    "first-iter": None,
+                    "last-iter": None,
                     "dimensions": None,
                     "output": "evolution.png",
                     "avg_window": 1,

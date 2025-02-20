@@ -38,16 +38,20 @@ class weEvolution(weAnalysis):
         self.set_dims(self._getd(opts, "dimensions", required=False))
         # Plotting energies or not?
         self.do_energy = self._getd(opts, "plot-energy", required=False)
+        self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
+        self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
+        self.first_iter, self.last_iter = self.set_iter_range(
+            self.first_iter, self.last_iter
+        )
         # output name
         self.outname = self._getd(
             opts, "output", default="evolution.png", required=False
         )
         # averaging window
         self.avg_window = self._getd(opts, "avg_window", default=10, required=False)
-        # set last iter
-        self.last_iter = self.h5file.attrs["west_current_iteration"] - 1
         # color bar
         self.color_bar = self._getd(opts, "color_bar", default=False, required=False)
+        self.bins = self._getd(opts, "bins", default=30, required=False)
 
     def set_dims(self, dims=None):
         if dims is None:
@@ -64,6 +68,14 @@ class weEvolution(weAnalysis):
             # naming scheme if we don't have one
             print("Giving default names to each dimension")
             self.names = dict((i, str(i)) for i in range(self.dims))
+
+    def set_iter_range(self, first_iter, last_iter):
+        if first_iter is None:
+            first_iter = 1
+        if last_iter is None:
+            last_iter = self.h5file.attrs["west_current_iteration"] - 1
+
+        return first_iter, last_iter
 
     def setup_figure(self):
         # Setup the figure and names for each dimension
@@ -98,6 +110,10 @@ class weEvolution(weAnalysis):
                         "w_pdist",
                         "-W",
                         "{}".format(self.h5file_path),
+                        "--first-iter",
+                        "{}".format(self.first_iter),
+                        "--last-iter",
+                        "{}".format(self.last_iter),
                         "-o",
                         "pdist.h5",
                         "-b",
@@ -127,7 +143,7 @@ class weEvolution(weAnalysis):
             axarr[0, i].set_ylabel(self.names[i], fontsize=name_fsize)
 
             # First pull a file that contains the dimension
-            Hists = datFile["histograms"][:]
+            Hists = datFile["histograms"][self.first_iter-1:self.last_iter]
             axes_to_average = tuple(d for d in range(1,self.dims+1) if d != i+1)
             Hists = Hists.mean(axis=axes_to_average)
 
@@ -153,7 +169,7 @@ class weEvolution(weAnalysis):
             cmap.set_under(color="white")
             
             pcolormesh = axarr[0, i].pcolormesh(
-                range(0, self.last_iter),
+                range(self.first_iter-1,self.last_iter),
                 x_bins,
                 Hists.T,
                 cmap=cmap,
