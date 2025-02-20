@@ -351,18 +351,27 @@ class weCluster(weAnalysis):
                 )
             proc.wait()
 
+        # Extract pdist file and average out the iterations
         datFile = h5py.File("pdist.h5", "r")
         Hists = datFile["histograms"][self.first_iter:self.last_iter].mean(axis=0)
         midpoints_0 = datFile['midpoints_0'][:]
         midpoints_1 = datFile['midpoints_1'][:]
+
+        # Figure out which bins are contained in high density regions
         density_threshold = np.percentile(Hists, 95)
         high_density_bins = Hists > density_threshold
         dense_coords = np.column_stack(np.where(high_density_bins))
+
+        # Run DBSCAN to cluster bins
         dbscan = DBSCAN(eps=1.5, min_samples=2).fit(dense_coords)
         cluster_labels = dbscan.labels_
         final_cluster_grid = np.full(Hists.shape,-1)
+
+        # Create 2D grid of the cluster labels. TODO: generalize this to N dimensions similar to averaging analysis
         for coord, label in zip(dense_coords, cluster_labels):
             final_cluster_grid[coord[0], coord[1]] = label
+
+        # Create a scatterplot displaying macrostates
         plt.figure(figsize=(8, 6))
         shapes = ['o', 's', 'D', '^', 'v', '<', '>', 'p', '*', 'h', 'H', '+']
         colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
