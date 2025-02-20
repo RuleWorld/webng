@@ -1,9 +1,11 @@
 import pickle, h5py, os, shutil
 from sys import stdout
 import numpy as np
-import pygpcca as pgp
+import matplotlib.pyplot as plt
+# import pygpcca as pgp
 import subprocess as sbpc
-from scipy.sparse import coo_matrix
+# from scipy.sparse import coo_matrix
+from sklearn.cluster import DBSCAN
 from webng.analysis.analysis import weAnalysis
 
 # Hacky way to ignore warnings, in particular pyemma insists on Python3
@@ -18,38 +20,59 @@ class weCluster(weAnalysis):
         super().__init__(opts)
         # Parse and set the arguments
         # get west.h5 path
-        self.westh5_path = os.path.join(self.opts["sim_name"], "west.h5")
+        self.h5file_path = os.path.join(self.opts["sim_name"], "west.h5")
+        self.h5file = h5py.File(self.h5file_path, "r")
+        self.set_dims(self._getd(opts, "dimensions", required=False))
         # iterations
-        self.first_iter, self.last_iter = self._getd(
-            opts, "first-iter", default=None, required=False
-        ), self._getd(opts, "last-iter", default=None, required=False)
+        self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
+        self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
+        self.first_iter, self.last_iter = self.set_iter_range(
+            self.first_iter, self.last_iter
+        )
+        self.bins = self._getd(opts, "bins", default=30, required=False)
+        self.threshold = self._getd(opts, "density-threshold")
         # get states
-        state_dict = self._getd(opts, "states", default=None, required=True)
-        self.states = {"states": state_dict}
+        # state_dict = self._getd(opts, "states", default=None, required=True)
+        # self.states = {"states": state_dict}
         # Open files
-        self.assignFile = self._load_assignments(
-            self._getd(opts, "assignments", default=None, required=False)
-        )
-        # Set assignments
-        self.assignments = self.assignFile["assignments"]
-        # load transition matrix
-        self.tm = self._load_trans_mat(
-            self._getd(opts, "transition-matrix", default=None, required=False)
-        )
-        # Set mstable file to save
-        self.mstab_file = self._getd(
-            opts,
-            "metastable-states-file",
-            default="metasble_assignments.pkl",
-            required=False,
-        )
-        # Cluster counts
-        self.min_cluster_count = self._getd(opts, "min-cluster-count", default=2, required=True)
-        self.max_cluster_count = self._getd(opts, "max-cluster-count", default=None, required=False)
-        # Do we symmetrize
-        self.symmetrize = self._getd(opts, "symmetrize", default=True, required=False)
-        # normalize data so results are in %s
-        self.normalize = self._getd(opts, "normalize", default=False, required=False)
+        # self.assignFile = self._load_assignments(
+        #     self._getd(opts, "assignments", default=None, required=False)
+        # )
+        # # Set assignments
+        # self.assignments = self.assignFile["assignments"]
+        # # load transition matrix
+        # self.tm = self._load_trans_mat(
+        #     self._getd(opts, "transition-matrix", default=None, required=False)
+        # )
+        # # Set mstable file to save
+        # self.mstab_file = self._getd(
+        #     opts,
+        #     "metastable-states-file",
+        #     default="metasble_assignments.pkl",
+        #     required=False,
+        # )
+        # # Cluster counts
+        # self.min_cluster_count = self._getd(opts, "min-cluster-count", default=2, required=True)
+        # self.max_cluster_count = self._getd(opts, "max-cluster-count", default=None, required=False)
+        # # Do we symmetrize
+        # self.symmetrize = self._getd(opts, "symmetrize", default=True, required=False)
+        # # normalize data so results are in %s
+        # self.normalize = self._getd(opts, "normalize", default=False, required=False)
+
+    def set_dims(self, dims=None):
+        if dims is None:
+            dims = self.h5file["iterations/iter_{:08d}".format(1)]["pcoord"].shape[2]
+        self.dims = dims
+        # return the dimensionality if we need to
+        return self.dims
+
+    def set_iter_range(self, first_iter, last_iter):
+        if first_iter is None:
+            first_iter = 1
+        if last_iter is None:
+            last_iter = self.h5file.attrs["west_current_iteration"] - 1
+
+        return first_iter, last_iter
 
     def _load_assignments(self, file_path):
         if file_path is None:
@@ -309,7 +332,52 @@ class weCluster(weAnalysis):
         self.save_mstable_assignments()
 
     def run(self):
-        """ """
-        self.cluster()
-        self.save_pcca()
-        self.get_mstable_assignments()
+        if not os.path.isfile("pdist.h5"):
+            print("pdist.h5 does not exist. Running w_pdist")
+            proc = sbpc.Popen(
+                    [
+                        "w_pdist",
+                        "-W",
+                        "{}".format(self.h5file_path),
+                        "--first-iter",
+                        "{}".format(self.first_iter),
+                        "--last-iter",
+                        "{}".format(self.last_iter),
+                        "-o",
+                        "pdist.h5",
+                        "-b",
+                        "{}".format(self.bins)
+                    ]
+                )
+            proc.wait()
+
+        datFile = h5py.File("pdist.h5", "r")
+        Hists = datFile["histograms"][self.first_iter:self.last_iter].mean(axis=0)
+        midpoints_0 = datFile['midpoints_0'][:]
+        midpoints_1 = datFile['midpoints_1'][:]
+        density_threshold = np.percentile(Hists, 95)
+        high_density_bins = Hists > density_threshold
+        dense_coords = np.column_stack(np.where(high_density_bins))
+        dbscan = DBSCAN(eps=1.5, min_samples=2).fit(dense_coords)
+        cluster_labels = dbscan.labels_
+        final_cluster_grid = np.full(Hists.shape,-1)
+        for coord, label in zip(dense_coords, cluster_labels):
+            final_cluster_grid[coord[0], coord[1]] = label
+        plt.figure(figsize=(8, 6))
+        shapes = ['o', 's', 'D', '^', 'v', '<', '>', 'p', '*', 'h', 'H', '+']
+        colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
+        for ix,x in enumerate(midpoints_0):
+            for iy,y in enumerate(midpoints_1):
+                label = final_cluster_grid[ix][iy]
+                if label == -1:
+                    s = 5
+                    plt.scatter(x,y,marker='x',s=s,c='k')
+                else:
+                    s = 80
+                    plt.scatter(x,y,marker=shapes[label],s=s,c=colors[label])
+        plt.savefig('cluster.png')
+
+        return
+        # self.cluster()
+        # self.save_pcca()
+        # self.get_mstable_assignments()
