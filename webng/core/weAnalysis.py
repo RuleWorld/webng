@@ -35,6 +35,8 @@ class weAnalysis:
             else:
                 work_path = None
             analysis_bins = analysis_dict["analysis_bins"]
+            first_iter = analysis_dict["first-iter"]
+            last_iter = analysis_dict["last-iter"]
             if self._getd(analysis_dict, "enabled", default=True):
                 # we should run the analyses we have
                 analysis_list = list(analysis_dict.keys())
@@ -47,6 +49,8 @@ class weAnalysis:
                         avg_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         avg_dict["work-path"] = work_path
                         avg_dict["bins"] = analysis_bins
+                        avg_dict["first-iter"] = first_iter
+                        avg_dict["last-iter"] = last_iter
                         weAverage(avg_dict).run()
                 if "evolution" in analysis_list:
                     evo_dict = analysis_dict["evolution"]
@@ -57,6 +61,8 @@ class weAnalysis:
                         evo_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         evo_dict["work-path"] = work_path
                         evo_dict["bins"] = analysis_bins
+                        evo_dict["first-iter"] = first_iter
+                        evo_dict["last-iter"] = last_iter
                         weEvolution(evo_dict).run()
                 if "cluster" in analysis_list:
                     clust_dict = analysis_dict["cluster"]
@@ -68,6 +74,9 @@ class weAnalysis:
                         ]
                         clust_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         clust_dict["work-path"] = work_path
+                        clust_dict["bins"] = analysis_bins
+                        clust_dict["first-iter"] = first_iter
+                        clust_dict["last-iter"] = last_iter
                         weCluster(clust_dict).run()
                 if "network" in analysis_list:
                     net_dict = analysis_dict["network"]
