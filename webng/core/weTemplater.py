@@ -109,6 +109,8 @@ class weTemplater:
             "analyses": {
                 "enabled": False,
                 "analysis_bins": 30,
+                "first-iter": None,
+                "last-iter": None,
                 "work-path": None,
                 "average": {
                     "enabled": False,
@@ -116,8 +118,6 @@ class weTemplater:
                     "plot-voronoi": False,
                     "plot-energy": False,
                     "normalize": False,
-                    "first-iter": None,
-                    "last-iter": None,
                     "dimensions": None,
                     "output": "average.png",
                     "smoothing": 0.5,
@@ -132,8 +132,6 @@ class weTemplater:
                     "enabled": False,
                     "plot-energy": False,
                     "normalize": False,
-                    "first-iter": None,
-                    "last-iter": None,
                     "dimensions": None,
                     "output": "evolution.png",
                     "avg_window": 1,
@@ -144,8 +142,6 @@ class weTemplater:
                 },
                 "cluster": {
                     "enabled": False,
-                    "first-iter": None,  # default, beginning of sim
-                    "last-iter": None,  # default, end of sim
                     "transition-matrix": None,  # default, make a new one
                     "assignments": None,  # default, make a new one
                     "metastable-states-file": None,  # default, metasble_assignments.pkl
