@@ -142,17 +142,9 @@ class weTemplater:
                 },
                 "cluster": {
                     "enabled": False,
-                    "transition-matrix": None,  # default, make a new one
-                    "assignments": None,  # default, make a new one
-                    "metastable-states-file": None,  # default, metasble_assignments.pkl
-                    "min-cluster-count": 2,  # default, 2, require the cluster count
-                    "max-cluster-count": None, # default, either min-cluster-count has the definitive cluster count or a range is given
-                    "normalize": None,  # default false
-                    "symmetrize": None,  # default true
-                    "states": [
-                        {"label": "a", "coords": [[20.0, 4.0]]},
-                        {"label": "b", "coords": [[4.0, 20.0]]},
-                    ],
+                    "threshold": 90,
+                    "min-samples": 2,
+                    "eps": 1.5
                 },
                 "network": {
                     "enabled": False,
