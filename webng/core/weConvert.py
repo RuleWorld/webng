@@ -482,7 +482,7 @@ class weConvert:
             "        scaleoffset: 4",
             "      - name:        final_state",
             "        scaleoffset: 4",
-            "  plugins:\n"] + insert + ["    - plugin: restart_plugin.RestartDriver",
+            "  plugins:"] + insert + ["    - plugin: restart_plugin.RestartDriver",
             "  librr:",
             "    init:",
             "      model_file: {} # Generate this".format(
