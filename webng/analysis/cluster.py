@@ -126,7 +126,7 @@ class weCluster(weAnalysis):
                                 yaml_texts[l] += f"\n      - [{x}, {y}]"
                 plt.xlabel(self.names[jj])
                 plt.ylabel(self.names[ii])
-                plt.savefig('cluster_{}_{}.png'.format(jj,ii))
+                plt.savefig('cluster_{}_{}.png'.format(self.names[jj],self.names[ii]))
                 plt.close()
 
         final_yaml_text = "states:"
