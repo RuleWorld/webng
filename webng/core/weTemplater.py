@@ -148,9 +148,7 @@ class weTemplater:
                 },
                 "network": {
                     "enabled": False,
-                    "pcca-pickle": None,
-                    "metastable-states-file": None,
-                    "state-labels": None,
+                    "step-iter": 10
                 },
             },
         }

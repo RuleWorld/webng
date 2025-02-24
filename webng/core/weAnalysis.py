@@ -37,6 +37,7 @@ class weAnalysis:
             analysis_bins = analysis_dict["analysis_bins"]
             first_iter = analysis_dict["first-iter"]
             last_iter = analysis_dict["last-iter"]
+            tau = self.opts["sampling_options"]["tau"]
             if self._getd(analysis_dict, "enabled", default=True):
                 # we should run the analyses we have
                 analysis_list = list(analysis_dict.keys())
@@ -83,14 +84,17 @@ class weAnalysis:
                     if self._getd(net_dict, "enabled", default=True):
                         print("running analysis: network")
                         # enabled, run
-                        if "cluster" in analysis_dict:
-                            net_dict["assignments"] = analysis_dict["cluster"][
-                                "assignments"
-                            ]
-                            net_dict["metastable-states-file"] = analysis_dict[
-                                "cluster"
-                            ]["metastable-states-file"]
+                        # if "cluster" in analysis_dict:
+                        #     net_dict["assignments"] = analysis_dict["cluster"][
+                        #         "assignments"
+                        #     ]
+                        #     net_dict["metastable-states-file"] = analysis_dict[
+                        #         "cluster"
+                        #     ]["metastable-states-file"]
                         net_dict["pcoords"] = self.opts["propagator_options"]["pcoords"]
                         net_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         net_dict["work-path"] = work_path
+                        net_dict["first-iter"] = first_iter
+                        net_dict["last-iter"] = last_iter
+                        net_dict["tau"] = tau
                         weNetwork(net_dict).run()

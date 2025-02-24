@@ -1,6 +1,12 @@
 import pickle, os, sys
 import numpy as np
-import networkx as nx
+import matplotlib.pyplot as plt
+import h5py
+import subprocess as sbpc
+import yaml
+from yaml import Loader
+import shutil
+# import networkx as nx
 from webng.analysis.analysis import weAnalysis
 
 # Hacky way to ignore warnings, in particular pyemma insists on Python3
@@ -14,153 +20,95 @@ class weNetwork(weAnalysis):
     def __init__(self, opts):
         # get our parent initialization setup
         super().__init__(opts)
-        # Parse and set the arguments
-        # Load PCCA
-        default_pcca = os.path.join(self.work_path, "pcca.pkl")
-        self.pcca_path = self._getd(
-            opts, "pcca-pickle", default=default_pcca, required=False
+        os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+        self.h5file_path = os.path.join(self.opts["sim_name"], "west.h5")
+        self.h5file = h5py.File(self.h5file_path, "r")
+        # iterations
+        self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
+        self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
+        self.first_iter, self.last_iter = self.set_iter_range(
+            self.first_iter, self.last_iter
         )
-        if self.pcca_path is None:
-            self.pcca_path = default_pcca
-        try:
-            self.pcca = self._load_pickle(self.pcca_path)
-        except:
-            print("can't open file {}, quitting".format(self.pcca_path))
-            sys.exit()
-        # Get transition matrix
-        self.full_tm = self.pcca.transition_matrix
-        self.coarse_tm = self.pcca.transition_matrix
-        # Set mstable file to load
-        default_mstab = os.path.join(self.work_path, "metasble_assignments.pkl")
-        self.mstab_file = self._getd(
-            opts, "metastable-states", default=default_mstab, required=False
-        )
-        self.mstabs = self._load_pickle(self.mstab_file)
-        # name file
-        self.state_label_path = self._getd(
-            opts, "state-labels", default=None, required=False
-        )
-        self.state_labels = self._load_state_labels(self.state_label_path)
-        self._set_state_dicts()
+        self.tau = self._getd(opts, "tau", default=10, required=True)
+        self.step_iter = self._getd(opts, "step-iter", default=10, required=False)
 
-    def _load_pickle(self, filename):
-        with open(filename, "rb") as f:
-            l = pickle.load(f)
-        return l
-
-    def _load_state_labels(self, slfile):
-        """ """
-        if slfile is not None:
-            with open(slfile, "r") as f:
-                labels = f.readline().split()
+        # check that clustering analysis was performed and there are macrostates to measure rates with
+        if not os.path.isfile("states.yaml"):
+            raise FileNotFoundError("states.yaml does not exist. Please run clustering analysis or assign macrostates")
         else:
-            labels = [str(i) for i in range(self.mstabs.max())]
+            with open("states.yaml", "r") as file:
+                states = yaml.load(file, Loader=Loader)
+                self.state_labels = [state["label"] for state in states["states"]]
 
-        return labels
+    def set_iter_range(self, first_iter, last_iter):
+        if first_iter is None:
+            first_iter = 1
+        if last_iter is None:
+            last_iter = self.h5file.attrs["west_current_iteration"] - 1
 
-    def _set_state_dicts(self):
-        # Get the dictionary
-        self.state_label_dict = dict(
-            zip(range(len(self.state_labels)), self.state_labels)
-        )
-        # Use matplotlib to pull colors for every state
-        self.state_colors = {
-            0: "#FF00FF",
-            1: "#000000",
-            2: "#FF0000",
-            3: "#0000FF",
-            4: "#FFFFFF",
-        }
-        return
-
-    def get_full_network(self):
-        node_sizes = self.pcca.stationary_probability * 1000
-        edge_sizes = self.pcca.transition_matrix
-        tm = edge_sizes
-
-        G = nx.DiGraph()
-        for i in range(tm.shape[0]):
-            if node_sizes[i] > 0:
-                G.add_node(
-                    i,
-                    weight=float(node_sizes[i]),
-                    color=self.state_colors[self.mstabs[i]],
-                    LabelGraphics={"text": " "},
-                    graphics={
-                        "type": "circle",
-                        "fill": self.state_colors[self.mstabs[i]],
-                        "w": node_sizes[i],
-                        "h": node_sizes[i],
-                    },
-                )
-
-        for i in range(tm.shape[0]):
-            for j in range(tm.shape[1]):
-                if i != j:
-                    # if edge_sizes[i][j] > 1e-2:
-                    if edge_sizes[i][j] > 0:
-                        G.add_edge(
-                            i,
-                            j,
-                            weight=float(edge_sizes[i][j]),
-                            graphics={
-                                "type": "arc",
-                                "targetArrow": "none",
-                                "fill": self.state_colors[self.mstabs[i]],
-                            },
-                        )
-
-        self.network = G
-        self.curr_network_ext = "full"
-        return
-
-    def get_coarse_network(self):
-        node_sizes = self.pcca.coarse_grained_stationary_probability * 1000
-        edge_sizes = self.pcca.coarse_grained_transition_matrix
-        tm = edge_sizes
-
-        G = nx.DiGraph()
-        for i in range(tm.shape[0]):
-            if node_sizes[i] > 0:
-                G.add_node(
-                    i,
-                    weight=float(node_sizes[i]),
-                    color=self.state_colors[i],
-                    LabelGraphics={"text": " "},  # )
-                    graphics={
-                        "type": "circle",
-                        "fill": self.state_colors[i],
-                        "w": node_sizes[i],
-                        "h": node_sizes[i],
-                    },
-                )
-
-        for i in range(tm.shape[0]):
-            for j in range(tm.shape[1]):
-                if i != j:
-                    if edge_sizes[i][j] > 0:
-                        G.add_edge(
-                            i,
-                            j,
-                            weight=float(edge_sizes[i][j]),
-                            graphics={
-                                "type": "arc",
-                                "targetArrow": "none",
-                                "fill": self.state_colors[i],
-                            },
-                        )
-
-        self.network = G
-        self.curr_network_ext = "coarse"
-        return
-
-    def save_network(self):
-        nx.write_gml(self.network, "pcca_{}.gml".format(self.curr_network_ext))
-        return
+        return first_iter, last_iter
 
     def run(self):
-        """ """
-        self.get_full_network()
-        self.save_network()
-        self.get_coarse_network()
-        self.save_network()
+        if not os.path.isfile("assign.h5"):
+            print("assign.h5 does not exist. Running w_assign")
+            proc = sbpc.Popen(
+                [
+                    "w_assign",
+                    "-W",
+                    "{}".format(self.h5file_path),
+                    "--states-from-file",
+                    "./analysis/states.yaml",
+                    "-o",
+                    "./analysis/assign.h5",
+                ]
+            ,cwd="../")
+            proc.wait()
+
+        if not os.path.isfile("direct.h5"):
+            print("direct.h5 does not exist. Running w_direct")
+            with open("direct_output.txt", "w") as f:
+                proc = sbpc.Popen(
+                    [
+                        "w_direct",
+                        "all",
+                        "-W",
+                        "{}".format(self.h5file_path),
+                        "-a",
+                        "./analysis/assign.h5",
+                        "--first-iter",
+                        "{}".format(self.first_iter),
+                        "--last-iter",
+                        "{}".format(self.last_iter),
+                        "--step-iter",
+                        "{}".format(self.step_iter),
+                        "-e",
+                        "cumulative"
+                    ]
+                ,stdout=sbpc.PIPE, stderr=sbpc.STDOUT, text=True, cwd="../")
+                for line in proc.stdout:
+                    print(line, end="")
+                    if not line.strip().endswith("..."):
+                        f.write(line)
+            shutil.move("../direct.h5", "direct.h5")
+
+        dirFile = h5py.File("direct.h5", "r")
+        rate_evolution = dirFile["rate_evolution"][:]
+        iter_range = np.linspace(self.first_iter,self.last_iter,len(rate_evolution))
+
+        for start_ind in range(len(self.state_labels)):
+            for end_ind in range(len(self.state_labels)):
+                if start_ind != end_ind:
+                    start_state_label = self.state_labels[start_ind]
+                    end_state_label = self.state_labels[end_ind]
+                    means = [time[start_ind][end_ind][2] for time in rate_evolution]
+                    ci_down = [time[start_ind][end_ind][3] for time in rate_evolution]
+                    ci_up = [time[start_ind][end_ind][4] for time in rate_evolution]
+                    plt.figure(figsize=(8, 6))
+                    plt.plot(iter_range,means,c='b')
+                    plt.fill_between(iter_range,ci_down,ci_up,color='b',alpha=0.15)
+                    plt.xlabel('Iteration')
+                    plt.ylabel('Transition Rate $\\tau^{-1}$')
+                    plt.savefig("rate_{}_to_{}".format(start_state_label,end_state_label))
+                    plt.close()
+
+        return
