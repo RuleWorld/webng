@@ -217,6 +217,6 @@ class weTemplater:
         #         os.path.join(self.template_dict["path_options"]["sim_name"], "analysis")
 
     def run(self):
-        ystr = yaml.dump(self.template_dict)
+        ystr = yaml.dump(self.template_dict, sort_keys=False)
         with open(self.out_file, "w") as f:
             f.write(ystr)
