@@ -4,7 +4,7 @@ try:
 except ImportError:
     from yaml import Loader, Dumper
 
-import yaml, os, shutil, sys, bionetgen
+import yaml, os, shutil, sys, westpa, bionetgen, platform
 import numpy as np
 
 # TODO: Expose more functionality to the options file
@@ -50,14 +50,16 @@ class weConvert:
         )
         if self.propagator_type == "libRoadRunner":
             self.pcoord_list = self._getd(propagator_options, "pcoords")
+
         # we need to find WESTPA and BNG
         path_options = self._getd(self.opts, "path_options")
-        self.WESTPA_path = self._getd(path_options, "WESTPA_path")
-        self.bng_path = self._getd(path_options, "bng_path")
+        self.WESTPA_path = self._get_westpa_path()
+        self.bng_path = self._get_bng_path()
         self.bngl_file = self._getd(path_options, "bngl_file")
         self.fname = self._getd(path_options, "sim_name", default="WE_BNG_sim")
         # Define where the BNG2.pl script is
         self.bngpl = os.path.join(self.bng_path, "BNG2.pl")
+
         # Sampling options
         sampling_options = self._getd(self.opts, "sampling_options")
         self.tau = self._getd(sampling_options, "tau")
@@ -78,6 +80,30 @@ class weConvert:
             self.num_bins = self._getd(binning_options, "num_bins", default=10)
             self.traj_per_bin = self._getd(binning_options, "traj_per_bin", default=10)
             self.block_size = self._getd(binning_options, "block_size", default=10)
+
+    def _get_westpa_path(self):
+        # full path to library
+        wlib_path = westpa.__path__[0]
+        # remove the last two folders, "wpath"/src/westpa
+        # is the standard form of this
+        wpath = os.path.split(wlib_path)[0]
+        wpath = os.path.split(wpath)[0]
+        return wpath
+
+    def _get_bng_path(self):
+        # now we need the BNG path, get it from the library as well
+        # we need the platform and the appropriate folder name
+        system = platform.system()
+        if system == "Linux":
+            bng_name = "bng-linux"
+        elif system == "Windows":
+            bng_name = "bng-win"
+        elif system == "Darwin":
+            bng_name = "bng-mac"
+        # get library path
+        lib_path = os.path.dirname(bionetgen.__file__)
+        bng_path = os.path.join(lib_path, bng_name)
+        return bng_path
 
     def _load_yaml(self, yfile):
         """
@@ -485,9 +511,7 @@ class weConvert:
             "  plugins:"] + insert + ["    - plugin: restart_plugin.RestartDriver",
             "  librr:",
             "    init:",
-            "      model_file: {} # Generate this".format(
-                os.path.join(self.main_dir, self.fname, "bngl_conf", "init.xml")
-            ),
+            "      model_file: ./bngl_conf/init.xml",
             "      init_time_step: 0",
             "      final_time_step: {}".format(self.tau),
             "      num_time_step: {}".format(step_no + 1),
@@ -713,14 +737,14 @@ class weConvert:
         # IMPORTANT!
         # This assumes that the bngl file doesn't have any directives at the end!
         # we have a bngl file
-        os.chdir("bngl_conf")
         # Make specific BNGL files for a) generating network and then
         # b) getting a starting  gdat file
-        model = bionetgen.bngmodel(self.bngl_file)
+        model = bionetgen.bngmodel(f"../{self.bngl_file}")
         model.add_action("generate_network", action_args={"overwrite": 1})
         model.add_action(
             "simulate", action_args={"method": "'ssa'", "t_end": 2, "n_steps": 2}
         )
+        os.chdir("bngl_conf")
         with open("init.bngl", "w") as f:
             f.write(str(model))
         r = bionetgen.run("init.bngl", "for_init")
