@@ -1,3 +1,4 @@
+import sys, os
 import numpy as np
 import pickle, sys
 import matplotlib
@@ -73,7 +74,11 @@ def assign_cluster():
 
 
 def load_mapper(h, iter_no):
+    parent_dir = os.path.abspath(os.path.join(os.getcwd(), ".."))
+    sys.path.append(parent_dir)
+
     import pickle
+    import system
 
     topol_grp = h["bin_topologies"]
     hashval = h["iterations/iter_{:08d}".format(iter_no)].attrs["binhash"]
