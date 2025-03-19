@@ -30,7 +30,7 @@ class weEvolution(weAnalysis):
     def __init__(self, opts):
         super().__init__(opts)
         # Once the arguments are parsed, do a few prep steps, opening h5file
-        self.h5file_path = os.path.join(opts["sim_name"], "west.h5")
+        self.h5file_path = "../west.h5"
         self.h5file = h5py.File(self.h5file_path, "r")
         # Set the dimensionality
         self.set_dims(self._getd(opts, "dimensions", required=False))
@@ -182,4 +182,5 @@ class weEvolution(weAnalysis):
 
         plt.tight_layout()
         self.save_fig()
+        os.chdir(self.curr_path)
         return

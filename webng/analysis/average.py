@@ -299,4 +299,5 @@ class weAverage(weAnalysis):
         f.subplots_adjust(hspace=0.3,wspace=0.4,top=0.98,left=0.1,bottom=0.1)
 
         self.save_fig()
+        os.chdir(self.curr_path)
         return

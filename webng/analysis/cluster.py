@@ -20,7 +20,7 @@ class weCluster(weAnalysis):
         super().__init__(opts)
         # Parse and set the arguments
         # get west.h5 path
-        self.h5file_path = os.path.join(self.opts["sim_name"], "west.h5")
+        self.h5file_path = "../west.h5"
         self.h5file = h5py.File(self.h5file_path, "r")
         self.set_dims(self._getd(opts, "dimensions", required=False))
         # iterations
@@ -135,4 +135,5 @@ class weCluster(weAnalysis):
             final_yaml_text += yaml_texts[i]
         with open("states.yaml", "w") as file:
             file.write(final_yaml_text)
+        os.chdir(self.curr_path)
         return
