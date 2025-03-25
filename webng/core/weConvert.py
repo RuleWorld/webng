@@ -823,7 +823,7 @@ except Exception as e:
     print(e)
 os.chdir(curr_path)'''))
         nb.cells.append(nbf.v4.new_markdown_cell('''## Cluster Analysis
-This analysis creates pdist.h5, which contains all of the probability distributions for each progress coordinate for each iteration. The cluster analysis attempts to find macrostates within the probability distribitions in your progress coordinates using scikit-learn's DBSCAN tool. These macrostates are recorded in states.yaml as a list of coordinates. While the coordinates are from the analysis histogram bins, the WESTPA bins that feature the coordinates will be considered part of that macrostate. If there is more than 1 progress coordinate, 2D scatter plots will be plotted to show the macrostates.'''))
+This analysis creates *pdist.h5*, which contains all of the probability distributions for each progress coordinate for each iteration. The cluster analysis attempts to find macrostates within the probability distribitions in your progress coordinates using scikit-learn's DBSCAN tool. These macrostates are recorded in *states.yaml* as a list of coordinates. While the coordinates are from the analysis histogram bins, the WESTPA bins that feature the coordinates will be considered part of that macrostate. If there is more than 1 progress coordinate, 2D scatter plots will be plotted to show the macrostates.'''))
         nb.cells.append(nbf.v4.new_code_cell('''cluster_opts = {
     **analsyis_opts,
     'threshold': 70,        # Percentile that the coordinate needs to reach to be considered part of a macrostate, or a dense coordinate
@@ -838,7 +838,7 @@ except Exception as e:
     print(e)
 os.chdir(curr_path)'''))
         nb.cells.append(nbf.v4.new_markdown_cell('''## Network Analysis
-This analysis must be performed after the cluster analysis as it requires states.yaml. The network analysis traces the WESTPA simulation and calculates the rates from each macrostate alongside each macrostate's probabiltiy. The written results are recorded in direct_output.txt, and each rate as it evolves over the course of the simulation is plotted. It is important to note that all the rates are in units of "tau^-1". This means you must divide the rates by the specified tau of the WESTPA simulation in order to get the rates in inverse seconds.'''))
+This analysis must be performed after the cluster analysis as it requires *states.yaml*. The network analysis traces the WESTPA simulation and calculates the rates from each macrostate alongside each macrostate's probabiltiy. The written results are recorded in *direct_output.txt*, and each rate as it evolves over the course of the simulation is plotted. It is important to note that all the rates are in units of "tau^-1". This means you must divide the rates by the specified tau of the WESTPA simulation in order to get the rates in inverse seconds.'''))
         nb.cells.append(nbf.v4.new_code_cell('''network_opts = {
     **analsyis_opts,
     'step-iter': 1          # Plots the rates by using traces from 1 to every Xth iteration
