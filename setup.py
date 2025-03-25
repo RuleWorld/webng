@@ -18,7 +18,9 @@ INSTALL_REQUIRES = [
     "bionetgen>=0.7.5",
     "libroadrunner",
     "networkx",
-    "westpa>=2022.01"
+    "westpa>=2022.01",
+    "scikit-learn",
+    "nbformat"
 ]
 
 EXTRAS_REQUIRE = {
