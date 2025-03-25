@@ -6,6 +6,7 @@ except ImportError:
 
 import yaml, os, shutil, sys, westpa, bionetgen, platform
 import numpy as np
+import nbformat as nbf
 
 # TODO: Expose more functionality to the options file
 # especially some of them can be optionally exposed
@@ -756,6 +757,102 @@ class weConvert:
         shutil.rmtree("for_init")
         os.chdir(os.path.join(self.main_dir, self.sim_dir))
         return model
+    
+    def make_analysis_notebook(self):
+        nb = nbf.v4.new_notebook()
+
+        nb.cells.append(nbf.v4.new_markdown_cell('''# WEBNG Analysis Jupyter Notebook
+Written by Alex DiBiasi'''))
+        nb.cells.append(nbf.v4.new_code_cell('''import os
+import matplotlib.pyplot as plt
+import webng.analysis as wb
+curr_path = os.getcwd()'''))
+        nb.cells.append(nbf.v4.new_markdown_cell('''## Options that apply to all analysis tools'''))
+        nb.cells.append(nbf.v4.new_code_cell('''analsyis_opts = {
+    'pcoords': ['S2_A','S2_B'],     # BNGL observables / WESTPA progress coordinates. These should not need to be changed
+    'sim_name': 'test',             # WESTPA simulation folder. This notebook should be in this folder. Also does not need changed
+    'analysis_bins': 30,            # Smoothness of the analysis histograms
+    'first-iter': None,             # Perform analyses starting from this iteration. 'None' will default to the first iteration.
+    'last-iter': None,              # Perform analyses ending at this iteration. 'None' will default to the last iteration.
+    'work-path': None               # Analysis folder that is created. 'None' will default to 'analysis'
+}'''))
+        nb.cells.append(nbf.v4.new_markdown_cell('''## Average Analysis
+This analysis creates *pdist.h5*, which contains all of the probability distributions for each progress coordinate for each iteration. The average analysis produces probability distributions for each progress coordinate over the iterations specified above by averaging them. The resulting plot shows 1D distributions for each progress coordinate. If there is more than 1 progress coordinate, 2D probability distrbitions will be plotted using every possible pair of progress coordinates'''))
+        nb.cells.append(nbf.v4.new_code_cell('''average_opts = {
+    **analsyis_opts,
+    'mapper-iter': None,            # Specifies which iteration to take adaptive voronoi bins to plot
+    'plot-voronoi': False,          # Plots the bins used in the WESTPA simulation
+    'plot-energy': False,           # If true, will plot energy by taking the negative log of the probability. E ~ -log(P)
+    'normalize': False,             # Normalize the distirbutions so that they range from 0-1
+    'dimensions': None,             # Specifies the first X dimensions to plot. 'None' will plot all dimensions
+    'output': 'average.png',        # Name of the output file
+    'smoothing': 0.5,               # Histogram smoothing option
+    'color_bar': True,              # Plots a color bar for each heatmap
+    'plot-opts':{                   
+        'name-font-size': 12,       # Font size
+        'voronoi-lw': 1,            # Line width of the plotted bins
+        'voronoi-col': 0.75         # Color of the plotted bins
+    }
+}'''))
+        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("../")
+avg_obj = wb.average.weAverage(average_opts)
+try:
+    f, axarr = avg_obj.run()
+except Exception as e:
+    print(e)
+os.chdir(curr_path)'''))
+        nb.cells.append(nbf.v4.new_markdown_cell('''## Evolution Analysis
+This analysis creates *pdist.h5*, which contains all of the probability distributions for each progress coordinate for each iteration. The evolution analysis produces probability distributions for each progress coordinate for each iteration in the specified iterations. The resulting plot shows 1D distributions for each progress coordinate for each iteration.'''))
+        nb.cells.append(nbf.v4.new_code_cell('''evolution_opts = {
+    **analsyis_opts,
+    'plot-energy': False,           # If true, will plot energy by taking the negative log of the probability. E ~ -log(P)
+    'normalize': False,             # Normalize the distirbutions so that they range from 0-1
+    'dimensions': None,             # Specifies the first X dimensions to plot. 'None' will plot all dimensions
+    'output': 'evolution.png',      # Name of the output file
+    'avg_window': 1,                # At 1, each iteration will be plotted, higher values will create an averging window for the specified iterations
+    'color_bar': False,             # Plots a color bar for each heatmap
+    'plot-opts': {
+        'name-font-size': 12        # Font size
+    }
+}'''))
+        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("../")
+evo_obj = wb.evolution.weEvolution(evolution_opts)
+try:
+    f, axarr = evo_obj.run()
+except Exception as e:
+    print(e)
+os.chdir(curr_path)'''))
+        nb.cells.append(nbf.v4.new_markdown_cell('''## Cluster Analysis
+This analysis creates pdist.h5, which contains all of the probability distributions for each progress coordinate for each iteration. The cluster analysis attempts to find macrostates within the probability distribitions in your progress coordinates using scikit-learn's DBSCAN tool. These macrostates are recorded in states.yaml as a list of coordinates. While the coordinates are from the analysis histogram bins, the WESTPA bins that feature the coordinates will be considered part of that macrostate. If there is more than 1 progress coordinate, 2D scatter plots will be plotted to show the macrostates.'''))
+        nb.cells.append(nbf.v4.new_code_cell('''cluster_opts = {
+    **analsyis_opts,
+    'threshold': 70,        # Percentile that the coordinate needs to reach to be considered part of a macrostate, or a dense coordinate
+    'min-samples': 4,       # The minimum number of dense coordinates to be considered a macrostate
+    'eps': 1.5              # The maximum difference 2 dense coordinates can have to be considered part of the same macrostate
+}'''))
+        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("../")
+clu_obj = wb.cluster.weCluster(cluster_opts)
+try:
+    figs = clu_obj.run()
+except Exception as e:
+    print(e)
+os.chdir(curr_path)'''))
+        nb.cells.append(nbf.v4.new_markdown_cell('''## Network Analysis
+This analysis must be performed after the cluster analysis as it requires states.yaml. The network analysis traces the WESTPA simulation and calculates the rates from each macrostate alongside each macrostate's probabiltiy. The written results are recorded in direct_output.txt, and each rate as it evolves over the course of the simulation is plotted. It is important to note that all the rates are in units of "tau^-1". This means you must divide the rates by the specified tau of the WESTPA simulation in order to get the rates in inverse seconds.'''))
+        nb.cells.append(nbf.v4.new_code_cell('''network_opts = {
+    **analsyis_opts,
+    'step-iter': 1          # Plots the rates by using traces from 1 to every Xth iteration
+}'''))
+        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("../")
+net_obj = wb.network.weNetwork(network_opts)
+try:
+    figs = net_obj.run()
+except Exception as e:
+    print(e)
+os.chdir(curr_path)'''))
+        
+        with open("analysis.ipynb", "w") as f:
+            nbf.write(nb, f)
 
     def run(self):
         """
@@ -768,4 +865,5 @@ class weConvert:
         self.write_static_files()
         self.run_BNGL_on_file()
         self.write_dynamic_files()
+        self.make_analysis_notebook()
         return
