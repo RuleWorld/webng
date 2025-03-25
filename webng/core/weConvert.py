@@ -768,14 +768,14 @@ import matplotlib.pyplot as plt
 import webng.analysis as wb
 curr_path = os.getcwd()'''))
         nb.cells.append(nbf.v4.new_markdown_cell('''## Options that apply to all analysis tools'''))
-        nb.cells.append(nbf.v4.new_code_cell('''analsyis_opts = {
+        nb.cells.append(nbf.v4.new_code_cell(f'''analsyis_opts = {{
     'pcoords': ['S2_A','S2_B'],     # BNGL observables / WESTPA progress coordinates. These should not need to be changed
-    'sim_name': 'test',             # WESTPA simulation folder. This notebook should be in this folder. Also does not need changed
+    'sim_name': '{self.fname}',             # WESTPA simulation folder. This notebook should be in this folder. Also does not need changed
     'analysis_bins': 30,            # Smoothness of the analysis histograms
     'first-iter': None,             # Perform analyses starting from this iteration. 'None' will default to the first iteration.
     'last-iter': None,              # Perform analyses ending at this iteration. 'None' will default to the last iteration.
     'work-path': None               # Analysis folder that is created. 'None' will default to 'analysis'
-}'''))
+}}'''))
         nb.cells.append(nbf.v4.new_markdown_cell('''## Average Analysis
 This analysis creates *pdist.h5*, which contains all of the probability distributions for each progress coordinate for each iteration. The average analysis produces probability distributions for each progress coordinate over the iterations specified above by averaging them. The resulting plot shows 1D distributions for each progress coordinate. If there is more than 1 progress coordinate, 2D probability distrbitions will be plotted using every possible pair of progress coordinates'''))
         nb.cells.append(nbf.v4.new_code_cell('''average_opts = {
@@ -826,8 +826,8 @@ os.chdir(curr_path)'''))
 This analysis creates *pdist.h5*, which contains all of the probability distributions for each progress coordinate for each iteration. The cluster analysis attempts to find macrostates within the probability distribitions in your progress coordinates using scikit-learn's DBSCAN tool. These macrostates are recorded in *states.yaml* as a list of coordinates. While the coordinates are from the analysis histogram bins, the WESTPA bins that feature the coordinates will be considered part of that macrostate. If there is more than 1 progress coordinate, 2D scatter plots will be plotted to show the macrostates.'''))
         nb.cells.append(nbf.v4.new_code_cell('''cluster_opts = {
     **analsyis_opts,
-    'threshold': 70,        # Percentile that the coordinate needs to reach to be considered part of a macrostate, or a dense coordinate
-    'min-samples': 4,       # The minimum number of dense coordinates to be considered a macrostate
+    'threshold': 90,        # Percentile that the coordinate needs to reach to be considered part of a macrostate, or a dense coordinate
+    'min-samples': 2,       # The minimum number of dense coordinates to be considered a macrostate
     'eps': 1.5              # The maximum difference 2 dense coordinates can have to be considered part of the same macrostate
 }'''))
         nb.cells.append(nbf.v4.new_code_cell('''os.chdir("../")
