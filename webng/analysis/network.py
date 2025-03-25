@@ -96,6 +96,8 @@ class weNetwork(weAnalysis):
         rate_evolution = dirFile["rate_evolution"][:]
         iter_range = np.linspace(self.first_iter,self.last_iter,len(rate_evolution))
 
+        figs = []
+
         for start_ind in range(len(self.state_labels)):
             for end_ind in range(len(self.state_labels)):
                 if start_ind != end_ind:
@@ -104,12 +106,13 @@ class weNetwork(weAnalysis):
                     means = [time[start_ind][end_ind][2] for time in rate_evolution]
                     ci_down = [time[start_ind][end_ind][3] for time in rate_evolution]
                     ci_up = [time[start_ind][end_ind][4] for time in rate_evolution]
-                    plt.figure(figsize=(8, 6))
-                    plt.plot(iter_range,means,c='b')
-                    plt.fill_between(iter_range,ci_down,ci_up,color='b',alpha=0.15)
-                    plt.xlabel('Iteration')
-                    plt.ylabel('Transition Rate $\\tau^{-1}$')
-                    plt.savefig("rate_{}_to_{}".format(start_state_label,end_state_label))
-                    plt.close()
+                    f, ax = plt.subplots(figsize=(8,6))
+                    ax.plot(iter_range,means,c='b')
+                    ax.fill_between(iter_range,ci_down,ci_up,color='b',alpha=0.15)
+                    ax.set_xlabel('Iteration')
+                    ax.set_ylabel('Transition Rate $\\tau^{-1}$')
+                    ax.set_title(f'{start_state_label}$\\rightarrow${end_state_label}')
+                    f.savefig("rate_{}_to_{}".format(start_state_label,end_state_label))
+                    figs.append(f)
         os.chdir(self.curr_path)
-        return
+        return figs

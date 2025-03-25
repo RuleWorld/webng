@@ -121,7 +121,6 @@ class weAverage(weAnalysis):
         # save the figure
         print("Saving figure to {}".format(outname))
         plt.savefig(outname, dpi=600)
-        plt.close()
         return
 
     def run(self, ext=None):
@@ -300,4 +299,4 @@ class weAverage(weAnalysis):
 
         self.save_fig()
         os.chdir(self.curr_path)
-        return
+        return f, axarr

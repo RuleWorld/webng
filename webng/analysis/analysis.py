@@ -12,7 +12,8 @@ class weAnalysis:
         # keep opts around
         self.opts = opts
         # Set work path
-        self.work_path = os.path.join(self.opts["sim_name"], "analysis")
+        if self.opts["work-path"] is None:
+            self.work_path = os.path.join(self.opts["sim_name"], "analysis")
         # we want to go there
         if not os.path.isdir(self.work_path):
             os.mkdir(self.work_path)

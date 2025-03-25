@@ -97,6 +97,8 @@ class weCluster(weAnalysis):
         yaml_texts = [""] * np.max(final_cluster_grid+1)
         colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
 
+        figs = []
+
         for jj in range(self.dims):
             for ii in range(jj+1,self.dims):
                 label_grid = [[set() for _ in range(self.bins)] for _ in range(self.bins)]
@@ -112,22 +114,22 @@ class weCluster(weAnalysis):
                 y_mid = datFile['midpoints_{}'.format(ii)][:]
 
                 # Create a scatterplot displaying macrostates
-                plt.figure(figsize=(8, 6))
+                f, ax = plt.subplots(figsize=(8,6))
                 for ix,x in enumerate(x_mid):
                     for iy,y in enumerate(y_mid):
                         label = label_grid[ix][iy]
                         if label == []:
                             s = 3
-                            plt.scatter(x,y,marker='o',s=s,c='k')
+                            ax.scatter(x,y,marker='o',s=s,c='k')
                         else:
                             s = 80
                             for l in label:
-                                plt.scatter(x,y,marker=f'${l}$',s=s,c=colors[l],alpha=0.5)
+                                ax.scatter(x,y,marker=f'${l}$',s=s,c=colors[l],alpha=0.5)
                                 yaml_texts[l] += f"\n      - [{x}, {y}]"
-                plt.xlabel(self.names[jj])
-                plt.ylabel(self.names[ii])
-                plt.savefig('cluster_{}_{}.png'.format(self.names[jj],self.names[ii]))
-                plt.close()
+                ax.set_xlabel(self.names[jj])
+                ax.set_ylabel(self.names[ii])
+                f.savefig('cluster_{}_{}.png'.format(self.names[jj],self.names[ii]))
+                figs.append(f)
 
         final_yaml_text = "states:"
         for i in range(np.max(final_cluster_grid)+1):
@@ -136,4 +138,4 @@ class weCluster(weAnalysis):
         with open("states.yaml", "w") as file:
             file.write(final_yaml_text)
         os.chdir(self.curr_path)
-        return
+        return figs
