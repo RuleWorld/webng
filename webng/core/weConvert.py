@@ -4,7 +4,7 @@ try:
 except ImportError:
     from yaml import Loader, Dumper
 
-import yaml, os, shutil, sys, westpa, bionetgen, platform
+import yaml, os, shutil, sys, westpa, bionetgen, platform, stat
 import numpy as np
 import nbformat as nbf
 
@@ -56,6 +56,7 @@ class weConvert:
         path_options = self._getd(self.opts, "path_options")
         self.WESTPA_path = self._get_westpa_path()
         self.bng_path = self._get_bng_path()
+        self.system = platform.system()
         self.bngl_file = self._getd(path_options, "bngl_file")
         self.fname = self._getd(path_options, "sim_name", default="WE_BNG_sim")
         # Define where the BNG2.pl script is
@@ -94,12 +95,11 @@ class weConvert:
     def _get_bng_path(self):
         # now we need the BNG path, get it from the library as well
         # we need the platform and the appropriate folder name
-        system = platform.system()
-        if system == "Linux":
+        if self.system == "Linux":
             bng_name = "bng-linux"
-        elif system == "Windows":
+        elif self.system == "Windows":
             bng_name = "bng-win"
-        elif system == "Darwin":
+        elif self.system == "Darwin":
             bng_name = "bng-mac"
         # get library path
         lib_path = os.path.dirname(bionetgen.__file__)
@@ -123,6 +123,7 @@ class weConvert:
             "from westpa.core.propagators import WESTPropagator",
             "import roadrunner as librr",
             "import logging",
+            "import os",
             "log = logging.getLogger(__name__)",
             "log.debug('loading module %r' % __name__)",
             "# We want to write the librrPropagator here",
@@ -138,7 +139,7 @@ class weConvert:
             "                    ('west','librr','data','pcoords')]:",
             "            config.require(key)",
             "        self.runner_config = {}",
-            "        self.runner_config['model_file'] = config['west','librr','init','model_file']",
+            "        self.runner_config['model_file'] = os.path.normpath(config['west','librr','init','model_file'])",
             "        self.runner_config['init_ts'] = config['west','librr','init','init_time_step']",
             "        self.runner_config['final_ts'] = config['west','librr','init','final_time_step']",
             "        self.runner_config['num_ts'] = config['west','librr','init','num_time_step']",
@@ -268,15 +269,28 @@ class weConvert:
         # TODO: Add submission scripts for varied clusters
         # TODO: Add a hook to write any submission scripts?
         lines = ["#!/bin/bash", 'w_run --work-manager processes "$@"']
-
+        
         full_text = "\n".join(lines)
         with open("run.sh", "w") as f:
             f.write(full_text)
         os.chmod("run.sh", 0o764)
 
+    def _write_runps1(self):
+        """
+        write the run.sh file for WESTPA simulations
+        """
+        # TODO: Add submission scripts for varied clusters
+        # TODO: Add a hook to write any submission scripts?
+        lines = ["w_run --work-manager processes $args"]
+        
+        full_text = "\n".join(lines)
+        with open("run.ps1", "w") as f:
+            f.write(full_text)
+        os.chmod("run.ps1", 0o764)
+
     def _write_envsh(self):
         """
-        environment script that uses westpa.sh to setup the environment
+        environment script that uses westpa.sh to setup the environment - Unix
         """
         if self.WESTPA_path is None:
             sys.exit("WESTPA path is not specified")
@@ -296,6 +310,28 @@ class weConvert:
         with open("env.sh", "w") as f:
             f.write(full_text)
         os.chmod("env.sh", 0o764)
+
+    def _write_envps1(self):
+        """
+        environment script that uses westpa.sh to setup the environment - Windows
+        """
+        if self.WESTPA_path is None:
+            sys.exit("WESTPA path is not specified")
+
+        lines = [
+            "$env:WEST_SIM_ROOT = (Get-Location).Path",
+            '$env:SIM_NAME = Split-Path -Leaf $env:WEST_SIM_ROOT',
+        ]
+
+        if self.copy_run_net:
+            lines.append('$env:RunNet = Join-Path $env:WEST_SIM_ROOT "bngl_conf\run_network"')
+        else:
+            lines.append('$env:RunNet = "{}/bin/run_network"'.format(self.bng_path))
+
+        full_text = "\n".join(lines)
+        with open("env.ps1", "w") as f:
+            f.write(full_text)
+        os.chmod("env.ps1", 0o764)
 
     def _write_auxfuncs(self):
         """
@@ -328,7 +364,7 @@ class weConvert:
         f.writelines(lines)
         f.close()
 
-    def _write_getpcoord(self):
+    def _write_getpcoord_sh(self):
         """
         the pcoord acquiring script for the inital center
         """
@@ -344,13 +380,18 @@ class weConvert:
             "  head -v $WEST_PCOORD_RETURN",
             "fi",
         ]
+        # OSDEPEND: EXECUTABLE - This won't work on Windows powershell
 
         full_text = "\n".join(lines)
         with open("westpa_scripts/get_pcoord.sh", "w") as f:
             f.write(full_text)
         os.chmod("westpa_scripts/get_pcoord.sh", 0o764)
 
-    def _write_postiter(self):
+    def _write_getpcoord_ps1(self):
+        print("SORRY NOT DEV'D YET")
+        return
+
+    def _write_postiter_sh(self):
         """
         a basic post-iteration script that deletes iterations that are
         older than 3 iterations
@@ -368,15 +409,20 @@ class weConvert:
             "  rm -f  seg_logs/${PREV_ITER}-*.log",
             "fi",
         ]
+        # OSDEPEND: EXECUTABLE - This won't work on Windows powershell
 
         full_text = "\n".join(lines)
         with open("westpa_scripts/post_iter.sh", "w") as f:
             f.write(full_text)
         os.chmod("westpa_scripts/post_iter.sh", 0o764)
 
+    def _write_postiter_ps1(self):
+        print("SORRY NOT DEV'D YET")
+        return
+
     def _write_initsh(self, traj=True):
         """
-        WESTPA initialization script
+        WESTPA initialization script for Unix
         """
         if traj:
             lines = [
@@ -406,6 +452,33 @@ class weConvert:
         with open("init.sh", "w") as f:
             f.write(full_text)
         os.chmod("init.sh", 0o764)
+
+    def _write_initps1(self, traj=True):
+        """
+        WESTPA initialization script for Windows
+        """
+        if traj:
+            lines = [
+                ". .\env.ps1",
+                "Remove-Item -Recurse -Force traj_segs, seg_logs, istates, west.h5 -ErrorAction SilentlyContinue",
+                "New-Item -ItemType Directory -Name seg_logs, traj_segs | Out-Null",
+                'Copy-Item "$env:WEST_SIM_ROOT\bngl_conf\init.net" -Destination "bstates\0.net"',
+                '$BSTATE_ARGS = "--bstate-file bstates/bstates.txt"',
+                "w_init $BSTATE_ARGS --segs-per-state 10 --work-manager=threads $args"
+            ]
+        else:
+            lines = [
+                ". .\env.ps1",
+                "Remove-Item -Recurse -Force istates, west.h5 -ErrorAction SilentlyContinue",
+                'Copy-Item "$env:WEST_SIM_ROOT\bngl_conf\init.net" -Destination "bstates\0.net"',
+                '$BSTATE_ARGS = "--bstate-file bstates/bstates.txt"',
+                "w_init $BSTATE_ARGS --segs-per-state 10 --work-manager=threads $args"
+            ]
+        
+        full_text = "\n".join(lines)
+        with open("init.ps1", "w") as f:
+            f.write(full_text)
+        os.chmod("init.ps1", 0o764)
 
     def _write_systempy(self):
         """
@@ -591,7 +664,7 @@ class weConvert:
             "      executable: $WEST_SIM_ROOT/westpa_scripts/pre_iter.sh",
             "      stderr:     stdout",
         ]
-
+        # OSDEPEND: EXECUTABLE - This refers to Bash scripts only Unix can use
         full_text = "\n".join(lines)
         with open("west.cfg", "w") as f:
             f.write(full_text)
@@ -648,10 +721,15 @@ class weConvert:
             "  rm -rf ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF",
             "fi"
         ]
+        # OSDEPEND: EXECUTABLE - This won't work on Windows powershell
         full_text = "\n".join(lines)
         with open("westpa_scripts/runseg.sh", "w") as f:
             f.write(full_text)
         os.chmod("westpa_scripts/runseg.sh", 0o764)
+
+    def _write_runsegps1(self):
+        print("SORRY NOT DEV'D YET")
+        return
 
     def write_dynamic_files(self):
         """
@@ -660,27 +738,46 @@ class weConvert:
         """
         self._write_systempy()
         self._write_westcfg()
-        if self.propagator_type == "executable":
-            self._write_runsegsh()
-            self._write_initsh(traj=True)
+        if self.system is "Windows":
+            if self.propagator_type == "executable":
+                self._write_runsegps1() # OS
+                self._write_initps1(traj=True) # OS
+            else:
+                self._write_initps1(traj=False) # OS
         else:
-            self._write_initsh(traj=False)
+            if self.propagator_type == "executable":
+                self._write_runsegsh() # OS
+                self._write_initsh(traj=True) # OS
+            else:
+                self._write_initsh(traj=False) # OS
 
     def write_static_files(self):
         """
         these files are always (mostly) the same regardless of given options
         """
         # everything here assumes we are in the right folder
-        self._write_envsh()
-        self._write_bstatestxt()
-        self._write_auxfuncs()
-        self._write_runsh()
-        if self.propagator_type == "executable":
-            self._write_getpcoord()
-            self._write_postiter()
-        elif self.propagator_type == "libRoadRunner":
-            self._write_restartDriver()
-            self._write_librrPropagator()
+        if self.system is 'Windows':
+            self._write_envps1() # OS
+            self._write_bstatestxt()
+            self._write_auxfuncs()
+            self._write_runps1() # OS
+            if self.propagator_type == "executable":
+                self._write_getpcoord_ps1() # OS
+                self._write_postiter_ps1() # OS
+            elif self.propagator_type == "libRoadRunner":
+                self._write_restartDriver()
+                self._write_librrPropagator()           
+        else:
+            self._write_envsh() # OS
+            self._write_bstatestxt()
+            self._write_auxfuncs()
+            self._write_runsh() # OS
+            if self.propagator_type == "executable":
+                self._write_getpcoord_sh() # OS
+                self._write_postiter_sh() # OS
+            elif self.propagator_type == "libRoadRunner":
+                self._write_restartDriver()
+                self._write_librrPropagator()
 
     def make_sim_folders(self):
         """
@@ -704,11 +801,13 @@ class weConvert:
         this copies the run_network binary with correct permissions to where
         WESTPA will expect to find it.
         """
-        # Assumes path is absolute path and not relative
-        shutil.copyfile(
-            os.path.join(self.bng_path, "bin/run_network"), "bngl_conf/run_network"
-        )
-        os.chmod("bngl_conf/run_network", 0o764)
+        source = os.path.join(self.bng_path, "bin", "run_network")
+        destination = os.path.join("bngl_conf", "run_network")
+        shutil.copyfile(source, destination)
+        if self.system is "Windows":
+            os.chmod(destination, 0o764)
+        else:
+            os.chmod(destination, stat.S_IWRITE)
 
     def run_BNGL_on_file(self):
         """
