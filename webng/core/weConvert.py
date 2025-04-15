@@ -801,12 +801,15 @@ class weConvert:
         this copies the run_network binary with correct permissions to where
         WESTPA will expect to find it.
         """
-        source = os.path.join(self.bng_path, "bin", "run_network")
-        destination = os.path.join("bngl_conf", "run_network")
-        shutil.copyfile(source, destination)
         if self.system is not "Windows":
+            source = os.path.join(self.bng_path, "bin", "run_network")
+            destination = os.path.join("bngl_conf", "run_network")
+            shutil.copyfile(source, destination)
             os.chmod(destination, 0o764)
         else:
+            source = os.path.join(self.bng_path, "bin", "run_network.exe")
+            destination = os.path.join("bngl_conf", "run_network.exe")
+            shutil.copyfile(source, destination)
             os.chmod(destination, stat.S_IWRITE)
 
     def run_BNGL_on_file(self):
