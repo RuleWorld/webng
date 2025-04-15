@@ -434,7 +434,7 @@ class weConvert:
                 'BSTATE_ARGS="--bstate-file bstates/bstates.txt"',
                 'w_init $BSTATE_ARGS --segs-per-state {} --work-manager=threads "$@"'.format(
                     self.traj_per_bin
-                ),
+                )
             ]
         else:
             lines = [
@@ -445,7 +445,7 @@ class weConvert:
                 'BSTATE_ARGS="--bstate-file bstates/bstates.txt"',
                 'w_init $BSTATE_ARGS --segs-per-state {} --work-manager=threads "$@"'.format(
                     self.traj_per_bin
-                ),
+                )
             ]
 
         full_text = "\n".join(lines)
@@ -463,16 +463,20 @@ class weConvert:
                 "Remove-Item -Recurse -Force traj_segs, seg_logs, istates, west.h5 -ErrorAction SilentlyContinue",
                 "New-Item -ItemType Directory -Name seg_logs, traj_segs | Out-Null",
                 'Copy-Item "$env:WEST_SIM_ROOT\\bngl_conf\init.net" -Destination "bstates\\0.net"',
-                '$BSTATE_ARGS = "--bstate-file bstates/bstates.txt"',
-                "w_init $BSTATE_ARGS --segs-per-state 10 --work-manager=threads $args"
+                '$BSTATE_ARGS = @("--bstate-file", "bstates/bstates.txt")',
+                "w_init @BSTATE_ARGS --segs-per-state {} --work-manager=threads $args".format(
+                    self.traj_per_bin
+                )
             ]
         else:
             lines = [
                 ". .\env.ps1",
                 "Remove-Item -Recurse -Force istates, west.h5 -ErrorAction SilentlyContinue",
                 'Copy-Item "$env:WEST_SIM_ROOT\\bngl_conf\init.net" -Destination "bstates\\0.net"',
-                '$BSTATE_ARGS = "--bstate-file bstates/bstates.txt"',
-                "w_init $BSTATE_ARGS --segs-per-state 10 --work-manager=threads $args"
+                '$BSTATE_ARGS = @("--bstate-file", "bstates/bstates.txt")',
+                "w_init @BSTATE_ARGS --segs-per-state {} --work-manager=threads $args".format(
+                    self.traj_per_bin
+                )
             ]
         
         full_text = "\n".join(lines)
