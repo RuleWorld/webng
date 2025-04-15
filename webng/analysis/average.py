@@ -32,7 +32,7 @@ class weAverage(weAnalysis):
     def __init__(self, opts):
         super().__init__(opts)
         # Once the arguments are parsed, do a few prep steps, opening h5file
-        self.h5file_path = "../west.h5"
+        self.h5file_path = os.path.join("..", "west.h5")
         self.h5file = h5py.File(self.h5file_path, "r")
         # We can determine an iteration to pull the mapper from ourselves
         self.get_mapper(self._getd(opts, "mapper-iter", default=None, required=False))

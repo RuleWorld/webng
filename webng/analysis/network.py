@@ -21,8 +21,8 @@ class weNetwork(weAnalysis):
         # get our parent initialization setup
         super().__init__(opts)
         os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
-        self.h5file_path = "west.h5"
-        self.h5file = h5py.File("../"+self.h5file_path, "r")
+        self.h5file_path = os.path.join("..", "west.h5")
+        self.h5file = h5py.File(self.h5file_path, "r")
         # iterations
         self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
         self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
@@ -62,6 +62,7 @@ class weNetwork(weAnalysis):
                     "./analysis/assign.h5",
                 ]
             ,cwd="../")
+            # OSDEPEND: Assumes Unix, ../. THIS SHOULD STILL WORK
             proc.wait()
 
         if not os.path.isfile("direct.h5"):
@@ -85,12 +86,13 @@ class weNetwork(weAnalysis):
                         "cumulative"
                     ]
                 ,stdout=sbpc.PIPE, stderr=sbpc.STDOUT, text=True, cwd="../")
+                # OSDEPEND: Assumes Unix, ../ THIS SHOULD STILL WORK
                 proc.wait()
                 for line in proc.stdout:
                     print(line, end="")
                     if not line.strip().endswith("..."):
                         f.write(line)
-            shutil.move("../direct.h5", "direct.h5")
+            shutil.move(os.path.join("..", "direct.h5"), "direct.h5")
 
         dirFile = h5py.File("direct.h5", "r")
         rate_evolution = dirFile["rate_evolution"][:]
