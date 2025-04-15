@@ -53,10 +53,10 @@ class weConvert:
             self.pcoord_list = self._getd(propagator_options, "pcoords")
 
         # we need to find WESTPA and BNG
+        self.system = platform.system()
         path_options = self._getd(self.opts, "path_options")
         self.WESTPA_path = self._get_westpa_path()
         self.bng_path = self._get_bng_path()
-        self.system = platform.system()
         self.bngl_file = self._getd(path_options, "bngl_file")
         self.fname = self._getd(path_options, "sim_name", default="WE_BNG_sim")
         # Define where the BNG2.pl script is
