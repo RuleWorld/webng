@@ -898,7 +898,7 @@ This analysis creates *pdist.h5*, which contains all of the probability distribu
         'voronoi-col': 0.75         # Color of the plotted bins
     }
 }'''))
-        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("../")
+        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("..")
 avg_obj = wb.average.weAverage(average_opts)
 try:
     f, axarr = avg_obj.run()
@@ -919,7 +919,7 @@ This analysis creates *pdist.h5*, which contains all of the probability distribu
         'name-font-size': 12        # Font size
     }
 }'''))
-        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("../")
+        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("..")
 evo_obj = wb.evolution.weEvolution(evolution_opts)
 try:
     f, axarr = evo_obj.run()
@@ -934,7 +934,7 @@ This analysis creates *pdist.h5*, which contains all of the probability distribu
     'min-samples': 2,       # The minimum number of dense coordinates to be considered a macrostate
     'eps': 1.5              # The maximum difference 2 dense coordinates can have to be considered part of the same macrostate
 }'''))
-        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("../")
+        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("..")
 clu_obj = wb.cluster.weCluster(cluster_opts)
 try:
     figs = clu_obj.run()
@@ -947,7 +947,7 @@ This analysis must be performed after the cluster analysis as it requires *state
     **analsyis_opts,
     'step-iter': 1          # Plots the rates by using traces from 1 to every Xth iteration
 }'''))
-        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("../")
+        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("..")
 net_obj = wb.network.weNetwork(network_opts)
 try:
     figs = net_obj.run()
