@@ -804,7 +804,7 @@ class weConvert:
         source = os.path.join(self.bng_path, "bin", "run_network")
         destination = os.path.join("bngl_conf", "run_network")
         shutil.copyfile(source, destination)
-        if self.system is "Windows":
+        if self.system is not "Windows":
             os.chmod(destination, 0o764)
         else:
             os.chmod(destination, stat.S_IWRITE)
