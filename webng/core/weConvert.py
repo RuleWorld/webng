@@ -462,7 +462,7 @@ class weConvert:
                 ". .\env.ps1",
                 "Remove-Item -Recurse -Force traj_segs, seg_logs, istates, west.h5 -ErrorAction SilentlyContinue",
                 "New-Item -ItemType Directory -Name seg_logs, traj_segs | Out-Null",
-                'Copy-Item "$env:WEST_SIM_ROOT\bngl_conf\init.net" -Destination "bstates\0.net"',
+                'Copy-Item "$env:WEST_SIM_ROOT\\bngl_conf\init.net" -Destination "bstates\\0.net"',
                 '$BSTATE_ARGS = "--bstate-file bstates/bstates.txt"',
                 "w_init $BSTATE_ARGS --segs-per-state 10 --work-manager=threads $args"
             ]
@@ -470,7 +470,7 @@ class weConvert:
             lines = [
                 ". .\env.ps1",
                 "Remove-Item -Recurse -Force istates, west.h5 -ErrorAction SilentlyContinue",
-                'Copy-Item "$env:WEST_SIM_ROOT\bngl_conf\init.net" -Destination "bstates\0.net"',
+                'Copy-Item "$env:WEST_SIM_ROOT\\bngl_conf\init.net" -Destination "bstates\\0.net"',
                 '$BSTATE_ARGS = "--bstate-file bstates/bstates.txt"',
                 "w_init $BSTATE_ARGS --segs-per-state 10 --work-manager=threads $args"
             ]
@@ -738,7 +738,7 @@ class weConvert:
         """
         self._write_systempy()
         self._write_westcfg()
-        if self.system is "Windows":
+        if self.system == "Windows":
             if self.propagator_type == "executable":
                 self._write_runsegps1() # OS
                 self._write_initps1(traj=True) # OS
@@ -756,7 +756,7 @@ class weConvert:
         these files are always (mostly) the same regardless of given options
         """
         # everything here assumes we are in the right folder
-        if self.system is 'Windows':
+        if self.system == 'Windows':
             self._write_envps1() # OS
             self._write_bstatestxt()
             self._write_auxfuncs()
@@ -801,15 +801,13 @@ class weConvert:
         this copies the run_network binary with correct permissions to where
         WESTPA will expect to find it.
         """
-        if self.system is not "Windows":
-            source = os.path.join(self.bng_path, "bin", "run_network")
-            destination = os.path.join("bngl_conf", "run_network")
-            shutil.copyfile(source, destination)
+        run_network = "run_network.exe" if self.system == "Windows" else "run_network"
+        source = os.path.join(self.bng_path, "bin", run_network)
+        destination = os.path.join("bngl_conf", run_network)
+        shutil.copyfile(source, destination)
+        if self.system != "Windows":
             os.chmod(destination, 0o764)
         else:
-            source = os.path.join(self.bng_path, "bin", "run_network.exe")
-            destination = os.path.join("bngl_conf", "run_network.exe")
-            shutil.copyfile(source, destination)
             os.chmod(destination, stat.S_IWRITE)
 
     def run_BNGL_on_file(self):
