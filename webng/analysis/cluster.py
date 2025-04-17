@@ -61,8 +61,7 @@ class weCluster(weAnalysis):
     def run(self):
         if not os.path.isfile("pdist.h5"):
             print("pdist.h5 does not exist. Running w_pdist")
-            proc = sbpc.Popen(
-                    [
+            command = [
                         "w_pdist",
                         "-W",
                         "{}".format(self.h5file_path),
@@ -75,10 +74,10 @@ class weCluster(weAnalysis):
                         "-b",
                         "{}".format(self.bins)
                     ]
-                )
+            if self.system == 'Windows':
+                command += ["--work-manager","threads"]
+            proc = sbpc.Popen(command)
             proc.wait()
-
-        # Extract pdist file and average out the iterations
         datFile = h5py.File("pdist.h5", "r")
         Hists = datFile["histograms"][self.first_iter:self.last_iter].mean(axis=0)
 

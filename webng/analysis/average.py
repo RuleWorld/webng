@@ -126,8 +126,7 @@ class weAverage(weAnalysis):
     def run(self, ext=None):
         if not os.path.isfile("pdist.h5"):
             print("pdist.h5 does not exist. Running w_pdist")
-            proc = sbpc.Popen(
-                    [
+            command = [
                         "w_pdist",
                         "-W",
                         "{}".format(self.h5file_path),
@@ -140,9 +139,10 @@ class weAverage(weAnalysis):
                         "-b",
                         "{}".format(self.bins)
                     ]
-                )
+            if self.system == 'Windows':
+                command += ["--work-manager","threads"]
+            proc = sbpc.Popen(command)
             proc.wait()
-
         datFile = h5py.File("pdist.h5", "r")
 
         if "plot-opts" in self.opts:
