@@ -23,7 +23,7 @@ class weNetwork(weAnalysis):
         self.system = platform.system()
         os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
         self.h5file_path = "west.h5"
-        self.h5file = h5py.File(os.pth.join("..",self.h5file_path), "r")
+        self.h5file = h5py.File(os.path.join("..",self.h5file_path), "r")
         # iterations
         self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
         self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
@@ -86,8 +86,6 @@ class weNetwork(weAnalysis):
                         "-e",
                         "cumulative"
                     ]
-                if self.system == 'Windows':
-                    command += ["--work-manager","threads"]
                 proc = sbpc.Popen(command,stdout=sbpc.PIPE, stderr=sbpc.STDOUT, text=True, cwd="../")
                 # OSDEPEND: Assumes Unix, ../ THIS SHOULD STILL WORK
                 proc.wait()
