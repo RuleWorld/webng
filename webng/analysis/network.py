@@ -1,4 +1,4 @@
-import pickle, os, sys
+import pickle, os, sys, platform
 import numpy as np
 import matplotlib.pyplot as plt
 import h5py
@@ -20,6 +20,7 @@ class weNetwork(weAnalysis):
     def __init__(self, opts):
         # get our parent initialization setup
         super().__init__(opts)
+        self.system = platform.system()
         os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
         self.h5file_path = "west.h5"
         self.h5file = h5py.File(os.pth.join("..",self.h5file_path), "r")

@@ -1,4 +1,4 @@
-import os, h5py
+import os, h5py, platform
 import subprocess as sbpc
 import matplotlib as mpl
 import matplotlib.pyplot as plt
@@ -30,6 +30,7 @@ class weEvolution(weAnalysis):
     def __init__(self, opts):
         super().__init__(opts)
         # Once the arguments are parsed, do a few prep steps, opening h5file
+        self.system = platform.system()
         self.h5file_path = os.path.join("..", "west.h5")
         self.h5file = h5py.File(self.h5file_path, "r")
         # Set the dimensionality

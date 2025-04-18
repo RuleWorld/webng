@@ -1,4 +1,4 @@
-import pickle, h5py, os, shutil
+import pickle, h5py, os, shutil, platform
 from sys import stdout
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,6 +20,7 @@ class weCluster(weAnalysis):
         super().__init__(opts)
         # Parse and set the arguments
         # get west.h5 path
+        self.system = platform.system()
         self.h5file_path = os.path.join("..", "west.h5")
         self.h5file = h5py.File(self.h5file_path, "r")
         self.set_dims(self._getd(opts, "dimensions", required=False))
