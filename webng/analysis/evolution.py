@@ -30,7 +30,7 @@ class weEvolution(weAnalysis):
     def __init__(self, opts):
         super().__init__(opts)
         # Once the arguments are parsed, do a few prep steps, opening h5file
-        self.system = platform.system()
+        # self.system = platform.system()
         self.h5file_path = os.path.join("..", "west.h5")
         self.h5file = h5py.File(self.h5file_path, "r")
         # Set the dimensionality
@@ -116,8 +116,8 @@ class weEvolution(weAnalysis):
                         "-b",
                         "{}".format(self.bins)
                     ]
-            if self.system == 'Windows':
-                command += ["--work-manager","threads"]
+            # if self.system == 'Windows':
+            #     command += ["--work-manager","threads"]
             proc = sbpc.Popen(command)
             proc.wait()
         datFile = h5py.File("pdist.h5", "r")

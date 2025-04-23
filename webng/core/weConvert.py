@@ -275,18 +275,16 @@ class weConvert:
             f.write(full_text)
         os.chmod("run.sh", 0o764)
 
-    def _write_runps1(self):
-        """
-        write the run.sh file for WESTPA simulations
-        """
-        # TODO: Add submission scripts for varied clusters
-        # TODO: Add a hook to write any submission scripts?
-        lines = ["w_run --work-manager processes $args"]
+    # def _write_runps1(self):
+    #     """
+    #     write the run.sh file for WESTPA simulations - WINDOWS VERSION
+    #     """
+    #     lines = ["w_run --work-manager processes $args"]
         
-        full_text = "\n".join(lines)
-        with open("run.ps1", "w") as f:
-            f.write(full_text)
-        os.chmod("run.ps1", 0o764)
+    #     full_text = "\n".join(lines)
+    #     with open("run.ps1", "w") as f:
+    #         f.write(full_text)
+    #     os.chmod("run.ps1", 0o764)
 
     def _write_envsh(self):
         """
@@ -311,27 +309,27 @@ class weConvert:
             f.write(full_text)
         os.chmod("env.sh", 0o764)
 
-    def _write_envps1(self):
-        """
-        environment script that uses westpa.sh to setup the environment - Windows
-        """
-        if self.WESTPA_path is None:
-            sys.exit("WESTPA path is not specified")
+    # def _write_envps1(self):
+    #     """
+    #     environment script that uses westpa.sh to setup the environment - WINDOWS VERSION
+    #     """
+    #     if self.WESTPA_path is None:
+    #         sys.exit("WESTPA path is not specified")
 
-        lines = [
-            "$env:WEST_SIM_ROOT = (Get-Location).Path",
-            '$env:SIM_NAME = Split-Path -Leaf $env:WEST_SIM_ROOT',
-        ]
+    #     lines = [
+    #         "$env:WEST_SIM_ROOT = (Get-Location).Path",
+    #         '$env:SIM_NAME = Split-Path -Leaf $env:WEST_SIM_ROOT',
+    #     ]
 
-        if self.copy_run_net:
-            lines.append('$env:RunNet = Join-Path $env:WEST_SIM_ROOT "bngl_conf\run_network"')
-        else:
-            lines.append('$env:RunNet = "{}/bin/run_network"'.format(self.bng_path))
+    #     if self.copy_run_net:
+    #         lines.append('$env:RunNet = Join-Path $env:WEST_SIM_ROOT "bngl_conf\run_network"')
+    #     else:
+    #         lines.append('$env:RunNet = "{}/bin/run_network"'.format(self.bng_path))
 
-        full_text = "\n".join(lines)
-        with open("env.ps1", "w") as f:
-            f.write(full_text)
-        os.chmod("env.ps1", 0o764)
+    #     full_text = "\n".join(lines)
+    #     with open("env.ps1", "w") as f:
+    #         f.write(full_text)
+    #     os.chmod("env.ps1", 0o764)
 
     def _write_auxfuncs(self):
         """
@@ -387,10 +385,6 @@ class weConvert:
             f.write(full_text)
         os.chmod("westpa_scripts/get_pcoord.sh", 0o764)
 
-    def _write_getpcoord_ps1(self):
-        print("SORRY NOT DEV'D YET")
-        return
-
     def _write_postiter_sh(self):
         """
         a basic post-iteration script that deletes iterations that are
@@ -415,10 +409,6 @@ class weConvert:
         with open("westpa_scripts/post_iter.sh", "w") as f:
             f.write(full_text)
         os.chmod("westpa_scripts/post_iter.sh", 0o764)
-
-    def _write_postiter_ps1(self):
-        print("SORRY NOT DEV'D YET")
-        return
 
     def _write_initsh(self, traj=True):
         """
@@ -453,36 +443,36 @@ class weConvert:
             f.write(full_text)
         os.chmod("init.sh", 0o764)
 
-    def _write_initps1(self, traj=True):
-        """
-        WESTPA initialization script for Windows
-        """
-        if traj:
-            lines = [
-                ". .\env.ps1",
-                "Remove-Item -Recurse -Force traj_segs, seg_logs, istates, west.h5 -ErrorAction SilentlyContinue",
-                "New-Item -ItemType Directory -Name seg_logs, traj_segs | Out-Null",
-                'Copy-Item "$env:WEST_SIM_ROOT\\bngl_conf\init.net" -Destination "bstates\\0.net"',
-                '$BSTATE_ARGS = @("--bstate-file", "bstates/bstates.txt")',
-                "w_init @BSTATE_ARGS --segs-per-state {} --work-manager=threads $args".format(
-                    self.traj_per_bin
-                )
-            ]
-        else:
-            lines = [
-                ". .\env.ps1",
-                "Remove-Item -Recurse -Force istates, west.h5 -ErrorAction SilentlyContinue",
-                'Copy-Item "$env:WEST_SIM_ROOT\\bngl_conf\init.net" -Destination "bstates\\0.net"',
-                '$BSTATE_ARGS = @("--bstate-file", "bstates/bstates.txt")',
-                "w_init @BSTATE_ARGS --segs-per-state {} --work-manager=threads $args".format(
-                    self.traj_per_bin
-                )
-            ]
+    # def _write_initps1(self, traj=True):
+    #     """
+    #     WESTPA initialization script - WINDOWS VERSION
+    #     """
+    #     if traj:
+    #         lines = [
+    #             ". .\env.ps1",
+    #             "Remove-Item -Recurse -Force traj_segs, seg_logs, istates, west.h5 -ErrorAction SilentlyContinue",
+    #             "New-Item -ItemType Directory -Name seg_logs, traj_segs | Out-Null",
+    #             'Copy-Item "$env:WEST_SIM_ROOT\\bngl_conf\init.net" -Destination "bstates\\0.net"',
+    #             '$BSTATE_ARGS = @("--bstate-file", "bstates/bstates.txt")',
+    #             "w_init @BSTATE_ARGS --segs-per-state {} --work-manager=threads $args".format(
+    #                 self.traj_per_bin
+    #             )
+    #         ]
+    #     else:
+    #         lines = [
+    #             ". .\env.ps1",
+    #             "Remove-Item -Recurse -Force istates, west.h5 -ErrorAction SilentlyContinue",
+    #             'Copy-Item "$env:WEST_SIM_ROOT\\bngl_conf\init.net" -Destination "bstates\\0.net"',
+    #             '$BSTATE_ARGS = @("--bstate-file", "bstates/bstates.txt")',
+    #             "w_init @BSTATE_ARGS --segs-per-state {} --work-manager=threads $args".format(
+    #                 self.traj_per_bin
+    #             )
+    #         ]
         
-        full_text = "\n".join(lines)
-        with open("init.ps1", "w") as f:
-            f.write(full_text)
-        os.chmod("init.ps1", 0o764)
+    #     full_text = "\n".join(lines)
+    #     with open("init.ps1", "w") as f:
+    #         f.write(full_text)
+    #     os.chmod("init.ps1", 0o764)
 
     def _write_systempy(self):
         """
@@ -731,10 +721,6 @@ class weConvert:
             f.write(full_text)
         os.chmod("westpa_scripts/runseg.sh", 0o764)
 
-    def _write_runsegps1(self):
-        print("SORRY NOT DEV'D YET")
-        return
-
     def write_dynamic_files(self):
         """
         these files change depending on the given options, in particular
@@ -742,46 +728,43 @@ class weConvert:
         """
         self._write_systempy()
         self._write_westcfg()
-        if self.system == "Windows":
-            if self.propagator_type == "executable":
-                self._write_runsegps1() # OS
-                self._write_initps1(traj=True) # OS
-            else:
-                self._write_initps1(traj=False) # OS
+        # if self.system == "Windows":
+        #     if self.propagator_type == "executable":
+        #         self._write_runsegps1() # OS
+        #         self._write_initps1(traj=True) # OS
+        #     else:
+        #         self._write_initps1(traj=False) # OS
+        if self.propagator_type == "executable":
+            self._write_runsegsh()
+            self._write_initsh(traj=True)
         else:
-            if self.propagator_type == "executable":
-                self._write_runsegsh() # OS
-                self._write_initsh(traj=True) # OS
-            else:
-                self._write_initsh(traj=False) # OS
+            self._write_initsh(traj=False)
 
     def write_static_files(self):
         """
         these files are always (mostly) the same regardless of given options
         """
-        # everything here assumes we are in the right folder
-        if self.system == 'Windows':
-            self._write_envps1() # OS
-            self._write_bstatestxt()
-            self._write_auxfuncs()
-            self._write_runps1() # OS
-            if self.propagator_type == "executable":
-                self._write_getpcoord_ps1() # OS
-                self._write_postiter_ps1() # OS
-            elif self.propagator_type == "libRoadRunner":
-                self._write_restartDriver()
-                self._write_librrPropagator()           
-        else:
-            self._write_envsh() # OS
-            self._write_bstatestxt()
-            self._write_auxfuncs()
-            self._write_runsh() # OS
-            if self.propagator_type == "executable":
-                self._write_getpcoord_sh() # OS
-                self._write_postiter_sh() # OS
-            elif self.propagator_type == "libRoadRunner":
-                self._write_restartDriver()
-                self._write_librrPropagator()
+        # if self.system == 'Windows':
+        #     self._write_envps1() # OS
+        #     self._write_bstatestxt()
+        #     self._write_auxfuncs()
+        #     self._write_runps1() # OS
+        #     if self.propagator_type == "executable":
+        #         self._write_getpcoord_ps1() # OS
+        #         self._write_postiter_ps1() # OS
+        #     elif self.propagator_type == "libRoadRunner":
+        #         self._write_restartDriver()
+        #         self._write_librrPropagator()           
+        self._write_envsh() # OS
+        self._write_bstatestxt()
+        self._write_auxfuncs()
+        self._write_runsh() # OS
+        if self.propagator_type == "executable":
+            self._write_getpcoord_sh() # OS
+            self._write_postiter_sh() # OS
+        elif self.propagator_type == "libRoadRunner":
+            self._write_restartDriver()
+            self._write_librrPropagator()
 
     def make_sim_folders(self):
         """

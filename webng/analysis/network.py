@@ -20,7 +20,7 @@ class weNetwork(weAnalysis):
     def __init__(self, opts):
         # get our parent initialization setup
         super().__init__(opts)
-        self.system = platform.system()
+        # self.system = platform.system()
         os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
         self.h5file_path = "west.h5"
         self.h5file = h5py.File(os.path.join("..",self.h5file_path), "r")
@@ -61,10 +61,7 @@ class weNetwork(weAnalysis):
                         "-o",
                         "./analysis/assign.h5",
                     ]
-            if self.system == 'Windows':
-                command += ["--work-manager","threads"]
             proc = sbpc.Popen(command,cwd="../")
-            # OSDEPEND: Assumes Unix, ../. THIS SHOULD STILL WORK
             proc.wait()
 
         if not os.path.isfile("direct.h5"):
@@ -87,7 +84,6 @@ class weNetwork(weAnalysis):
                         "cumulative"
                     ]
                 proc = sbpc.Popen(command,stdout=sbpc.PIPE, stderr=sbpc.STDOUT, text=True, cwd="../")
-                # OSDEPEND: Assumes Unix, ../ THIS SHOULD STILL WORK
                 proc.wait()
                 for line in proc.stdout:
                     print(line, end="")

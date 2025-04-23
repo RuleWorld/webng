@@ -17,7 +17,6 @@ class weAnalysis:
         # we want to go there
         if not os.path.isdir(self.work_path):
             os.mkdir(self.work_path)
-        # OSDEPEND: THIS SHOULD WORK
         # assert os.path.isdir(self.work_path), "Work path: {} doesn't exist".format(self.work_path)
         self.curr_path = os.getcwd()
         os.chdir(self.work_path)
