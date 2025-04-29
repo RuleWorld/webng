@@ -263,10 +263,11 @@ class weAverage(weAnalysis):
                     )
 
                     if self.color_bar:
-                        f.colorbar(
+                        cbar = f.colorbar(
                             pcolormesh,
                             ax=axarr[ii, jj]
                         )
+                        cbar.ax.tick_params(labelsize=name_fsize)
 
                     # Plot vornoi bins if asked
                     if self.voronoi:
@@ -297,6 +298,8 @@ class weAverage(weAnalysis):
         # Adjust the figure so that both tick labels and axes labels for subplots fit
         f.tight_layout(rect=[0.1,0.1,1,1])
         f.subplots_adjust(hspace=0.3,wspace=0.4,top=0.98,left=0.1,bottom=0.1)
+        for ax in axarr.flat:
+            ax.tick_params(axis='both', which='major', labelsize=name_fsize)
 
         self.save_fig()
         os.chdir(self.curr_path)
