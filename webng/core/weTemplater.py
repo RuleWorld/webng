@@ -74,28 +74,41 @@ class weTemplater:
             self.inp_file = args.input
         self.out_file = args.output
         # setup a template dictionary
-        self.template_dict = {
-            "propagator_options": {"propagator_type": "libRoadRunner", "pcoords": None},
-            "binning_options": {
+        if args.bins == 'adaptive':
+            binning_dict = {
+                "style": 'adaptive',
                 "block_size": 10,
                 "center_freq": 1,
                 "max_centers": 300,
-                "traj_per_bin": 100,
-            },
+                "traj_per_bin": 10,
+            }
+        else:
+            binning_dict = {
+                "style": 'regular',
+                "first_edge": None,
+                "last_edge": None,
+                "num_bins": None,
+                "traj_per_bin": 10,
+                "block_size": 10
+            }
+        self.template_dict = {
+            "propagator_options": {"propagator_type": "libRoadRunner", "pcoords": None},
+            "binning_options": binning_dict,
             "path_options": {
-                "WESTPA_path": None,
-                "bng_path": None,
-                "bngl_file": None,
-                "sim_name": None,
+                "bngl_file": self.inp_file,
+                "sim_name": self.inp_file[:-5],
             },
             "sampling_options": {
                 "dimensions": None,
                 "max_iter": 100,
                 "pcoord_length": 10,
-                "tau": 100,
+                "tau": 10,
             },
             "analyses": {
                 "enabled": False,
+                "analysis_bins": 30,
+                "first-iter": None,
+                "last-iter": None,
                 "work-path": None,
                 "average": {
                     "enabled": False,
@@ -103,11 +116,10 @@ class weTemplater:
                     "plot-voronoi": False,
                     "plot-energy": False,
                     "normalize": False,
-                    "first-iter": None,
-                    "last-iter": None,
                     "dimensions": None,
                     "output": "average.png",
                     "smoothing": 0.5,
+                    "color_bar": True,
                     "plot-opts": {
                         "name-font-size": 12,
                         "voronoi-lw": 1,
@@ -121,59 +133,25 @@ class weTemplater:
                     "dimensions": None,
                     "output": "evolution.png",
                     "avg_window": 1,
+                    "color_bar": False,
                     "plot-opts": {
                         "name-font-size": 12,
                     },
                 },
                 "cluster": {
                     "enabled": False,
-                    "first-iter": None,  # default, beginning of sim
-                    "last-iter": None,  # default, end of sim
-                    "transition-matrix": None,  # default, make a new one
-                    "assignments": None,  # default, make a new one
-                    "metastable-states-file": None,  # default, metasble_assignments.pkl
-                    "cluster-count": 2,  # default, 2, require the cluster count
-                    "normalize": None,  # default false
-                    "symmetrize": None,  # default true
-                    "states": [
-                        {"label": "a", "coords": [[20.0, 4.0]]},
-                        {"label": "b", "coords": [[4.0, 20.0]]},
-                    ],
+                    "threshold": 90,
+                    "min-samples": 2,
+                    "eps": 1.5
                 },
                 "network": {
                     "enabled": False,
-                    "pcca-pickle": None,
-                    "metastable-states-file": None,
-                    "state-labels": None,
+                    "step-iter": 10
                 },
             },
         }
         # adjust dictionary
         self._adjust_template()
-
-    def _get_westpa_path(self):
-        # full path to library
-        wlib_path = westpa.__path__[0]
-        # remove the last two folders, "wpath"/src/westpa
-        # is the standard form of this
-        wpath = os.path.split(wlib_path)[0]
-        wpath = os.path.split(wpath)[0]
-        return wpath
-
-    def _get_bng_path(self):
-        # now we need the BNG path, get it from the library as well
-        # we need the platform and the appropriate folder name
-        system = platform.system()
-        if system == "Linux":
-            bng_name = "bng-linux"
-        elif system == "Windows":
-            bng_name = "bng-win"
-        elif system == "Darwin":
-            bng_name = "bng-mac"
-        # get library path
-        lib_path = os.path.dirname(bionetgen.__file__)
-        bng_path = os.path.join(lib_path, bng_name)
-        return bng_path
 
     def _get_pcoords(self):
         # use bng api to get the model object
@@ -185,22 +163,14 @@ class weTemplater:
         return obs_arr
 
     def _adjust_template(self):
-        # set westpa path
-        self.template_dict["path_options"]["WESTPA_path"] = self._get_westpa_path()
-        # set bng path
-        self.template_dict["path_options"]["bng_path"] = self._get_bng_path()
-        # input model
-        self.template_dict["path_options"]["bngl_file"] = os.path.abspath(self.inp_file)
-        # output folder
-        model_file = os.path.split(self.inp_file)[1]
-        model_name = os.path.splitext(model_file)[0]
-        self.template_dict["path_options"]["sim_name"] = os.path.join(
-            os.getcwd(), model_name
-        )
         # set propagator options, in particular get observable names
         pcoords = self._get_pcoords()
         self.template_dict["propagator_options"]["pcoords"] = pcoords
         self.template_dict["sampling_options"]["dimensions"] = len(pcoords)
+        if self.template_dict["binning_options"]["style"] == "regular":
+            self.template_dict["binning_options"]["first_edge"] = [0] * len(pcoords)
+            self.template_dict["binning_options"]["last_edge"] = [50] * len(pcoords)
+            self.template_dict["binning_options"]["num_bins"] = [10] * len(pcoords)
         # # update analysis options as well
         # for an_key in self.template_dict["analyses"].keys():
         #     if an_key == "enabled":
@@ -209,6 +179,6 @@ class weTemplater:
         #         os.path.join(self.template_dict["path_options"]["sim_name"], "analysis")
 
     def run(self):
-        ystr = yaml.dump(self.template_dict)
+        ystr = yaml.dump(self.template_dict, sort_keys=False)
         with open(self.out_file, "w") as f:
             f.write(ystr)

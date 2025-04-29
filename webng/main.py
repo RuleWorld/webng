@@ -81,6 +81,15 @@ class weBNGBase(cement.Controller):
                     "required": False,
                 },
             ),
+            (
+                ["--bins"],
+                {
+                    "help": "The binning strategy used. 'adaptive' uses an adaptive voronoi binning scheme as described in Zhang 2010, J Chem Phys, 132. 'regular' constructs rectangular bins using voronoi centers (default: adaptive)",
+                    "default": "adaptive",
+                    "choices": ['adaptive','regular'],
+                    "required": False,
+                },
+            )
         ],
     )
     def template(self):

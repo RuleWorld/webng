@@ -1,4 +1,5 @@
 import sys, yaml
+from yaml import Loader
 from webng.analysis import weAverage, weEvolution, weCluster, weNetwork
 
 
@@ -15,7 +16,7 @@ class weAnalysis:
 
     def __init__(self, args) -> None:
         with open(args.opts, "r") as f:
-            opt_dict = yaml.load(f)
+            opt_dict = yaml.load(f,Loader=Loader)
         self.opts = opt_dict
 
     def _getd(self, dic, key, default=None, required=True):
@@ -33,7 +34,10 @@ class weAnalysis:
                 work_path = analysis_dict["work-path"]
             else:
                 work_path = None
-            #
+            analysis_bins = analysis_dict["analysis_bins"]
+            first_iter = analysis_dict["first-iter"]
+            last_iter = analysis_dict["last-iter"]
+            tau = self.opts["sampling_options"]["tau"]
             if self._getd(analysis_dict, "enabled", default=True):
                 # we should run the analyses we have
                 analysis_list = list(analysis_dict.keys())
@@ -45,6 +49,9 @@ class weAnalysis:
                         avg_dict["pcoords"] = self.opts["propagator_options"]["pcoords"]
                         avg_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         avg_dict["work-path"] = work_path
+                        avg_dict["bins"] = analysis_bins
+                        avg_dict["first-iter"] = first_iter
+                        avg_dict["last-iter"] = last_iter
                         weAverage(avg_dict).run()
                 if "evolution" in analysis_list:
                     evo_dict = analysis_dict["evolution"]
@@ -54,6 +61,9 @@ class weAnalysis:
                         evo_dict["pcoords"] = self.opts["propagator_options"]["pcoords"]
                         evo_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         evo_dict["work-path"] = work_path
+                        evo_dict["bins"] = analysis_bins
+                        evo_dict["first-iter"] = first_iter
+                        evo_dict["last-iter"] = last_iter
                         weEvolution(evo_dict).run()
                 if "cluster" in analysis_list:
                     clust_dict = analysis_dict["cluster"]
@@ -65,20 +75,26 @@ class weAnalysis:
                         ]
                         clust_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         clust_dict["work-path"] = work_path
+                        clust_dict["bins"] = analysis_bins
+                        clust_dict["first-iter"] = first_iter
+                        clust_dict["last-iter"] = last_iter
                         weCluster(clust_dict).run()
                 if "network" in analysis_list:
                     net_dict = analysis_dict["network"]
                     if self._getd(net_dict, "enabled", default=True):
                         print("running analysis: network")
                         # enabled, run
-                        if "cluster" in analysis_dict:
-                            net_dict["assignments"] = analysis_dict["cluster"][
-                                "assignments"
-                            ]
-                            net_dict["metastable-states-file"] = analysis_dict[
-                                "cluster"
-                            ]["metastable-states-file"]
+                        # if "cluster" in analysis_dict:
+                        #     net_dict["assignments"] = analysis_dict["cluster"][
+                        #         "assignments"
+                        #     ]
+                        #     net_dict["metastable-states-file"] = analysis_dict[
+                        #         "cluster"
+                        #     ]["metastable-states-file"]
                         net_dict["pcoords"] = self.opts["propagator_options"]["pcoords"]
                         net_dict["sim_name"] = self.opts["path_options"]["sim_name"]
                         net_dict["work-path"] = work_path
+                        net_dict["first-iter"] = first_iter
+                        net_dict["last-iter"] = last_iter
+                        net_dict["tau"] = tau
                         weNetwork(net_dict).run()
