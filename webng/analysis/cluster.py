@@ -94,11 +94,9 @@ class weCluster(weAnalysis):
         for coord, label in zip(dense_coords, cluster_labels):
             final_cluster_grid[tuple(coord)] = label
 
-        yaml_texts = [""] * np.max(final_cluster_grid+1)
-        colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-
+        print("plotting macrostates")
         figs = []
-
+        colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
         for jj in range(self.dims):
             for ii in range(jj+1,self.dims):
                 label_grid = [[set() for _ in range(self.bins)] for _ in range(self.bins)]
@@ -125,17 +123,23 @@ class weCluster(weAnalysis):
                             s = 80
                             for l in label:
                                 ax.scatter(x,y,marker=f'${l}$',s=s,c=colors[l],alpha=0.5)
-                                yaml_texts[l] += f"\n      - [{x}, {y}]"
                 ax.set_xlabel(self.names[jj])
                 ax.set_ylabel(self.names[ii])
                 f.savefig('cluster_{}_{}.png'.format(self.names[jj],self.names[ii]))
                 figs.append(f)
 
+        print("printing macrostates")
+        yaml_texts = [""] * np.max(final_cluster_grid+1)
+        for index in np.ndindex(final_cluster_grid.shape):
+            midpoints = [datFile['midpoints_{}'.format(dim)][:][mid] for dim,mid in enumerate(index)]
+            label = final_cluster_grid[index]
+            yaml_texts[label] += f"\n      - {midpoints}"
         final_yaml_text = "states:"
         for i in range(np.max(final_cluster_grid)+1):
             final_yaml_text += f"\n  - label: state{i}\n    coords:"
             final_yaml_text += yaml_texts[i]
         with open("states.yaml", "w") as file:
             file.write(final_yaml_text)
+        
         os.chdir(self.curr_path)
         return figs
