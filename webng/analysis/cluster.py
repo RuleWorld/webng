@@ -31,7 +31,7 @@ class weCluster(weAnalysis):
             self.first_iter, self.last_iter
         )
         self.bins = self._getd(opts, "bins", default=30, required=False)
-        self.threshold = self._getd(opts, "density-threshold", default=90, required=True)
+        self.threshold = self._getd(opts, "threshold", default=90, required=True)
         self.min_samples = self._getd(opts, "min-samples", default=2, required=True)
         self.eps = self._getd(opts, "eps", default=1.5, required=True)
 
@@ -133,7 +133,8 @@ class weCluster(weAnalysis):
         for index in np.ndindex(final_cluster_grid.shape):
             midpoints = [datFile['midpoints_{}'.format(dim)][:][mid] for dim,mid in enumerate(index)]
             label = final_cluster_grid[index]
-            yaml_texts[label] += f"\n      - {midpoints}"
+            if label > -1:
+                yaml_texts[label] += f"\n      - {midpoints}"
         final_yaml_text = "states:"
         for i in range(np.max(final_cluster_grid)+1):
             final_yaml_text += f"\n  - label: state{i}\n    coords:"
