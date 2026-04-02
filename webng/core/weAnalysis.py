@@ -1,6 +1,6 @@
 import sys, yaml
 from yaml import Loader
-from webng.analysis import weAverage, weEvolution, weCluster, weNetwork
+from webng.analysis import weAverage, weEvolution, weCluster, weNetwork, weFlux
 
 
 class weAnalysis:
@@ -98,3 +98,13 @@ class weAnalysis:
                         net_dict["last-iter"] = last_iter
                         net_dict["tau"] = tau
                         weNetwork(net_dict).run()
+                if "flux" in analysis_list:
+                    flux_dict = analysis_dict["flux"]
+                    if self._getd(flux_dict, "enabled", default=True):
+                        print("running analysis: flux")
+                        flux_dict["pcoords"]    = self.opts["propagator_options"]["pcoords"]
+                        flux_dict["sim_name"]   = self.opts["path_options"]["sim_name"]
+                        flux_dict["work-path"]  = work_path
+                        flux_dict["first-iter"] = first_iter
+                        flux_dict["last-iter"]  = last_iter
+                        weFlux(flux_dict).run()

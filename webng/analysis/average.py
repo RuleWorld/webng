@@ -1,6 +1,8 @@
 import os, h5py, sys, platform
 import scipy.ndimage
 import subprocess as sbpc
+import yaml
+from yaml import Loader
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
@@ -35,12 +37,10 @@ class weAverage(weAnalysis):
         # self.system = platform.system()
         self.h5file_path = os.path.join("..", "west.h5")
         self.h5file = h5py.File(self.h5file_path, "r")
-        # We can determine an iteration to pull the mapper from ourselves
-        self.get_mapper(self._getd(opts, "mapper-iter", default=None, required=False))
         # Set the dimensionality
         self.set_dims(self._getd(opts, "dimensions", required=False))
-        # Voronoi or not
-        self.voronoi = self._getd(opts, "plot-voronoi", default=False, required=False)
+        # Plot the bins?
+        self.plot_boundaries = self._getd(opts, "plot-boundaries", default=False, required=False)
         # Plotting energies or not?
         self.do_energy = self._getd(opts, "plot-energy", default=False, required=False)
         # iterations
@@ -59,6 +59,33 @@ class weAverage(weAnalysis):
         self.color_bar = self._getd(opts, "color_bar", default=True, required=False)
         # get analysis bins
         self.bins = self._getd(opts, "bins", default=30, required=False)
+
+        # handle plotting bin boundaries if needed
+        self.style = None
+        self.boundaries = None
+        self.mapper = None
+        if self.plot_boundaries:
+            try:
+                from system import System
+                sys_obj = System()
+                sys_obj.initialize()
+                # Detect style from the mapper type
+                mapper_type = type(sys_obj.bin_mapper).__name__
+                if mapper_type == "RectilinearBinMapper":
+                    self.style = "regular"
+                    self.boundaries = sys_obj.bin_mapper.boundaries
+                elif mapper_type == "SingleBinMapper":
+                    self.style = "mabl"
+                    # plot_boundaries is silently ignored for MABL
+                else:
+                    # Assume adaptive (VoronoiBinMapper or similar)
+                    self.style = "adaptive"
+                    self.mapper = self.get_mapper(
+                        self._getd(opts, "mapper-iter", default=None, required=False)
+                    )
+            except Exception as e:
+                print("Warning: could not determine binning style for boundary "
+                    "plotting: {}".format(e))
 
     def get_mapper(self, mapper_iter):
         # Gotta fix this behavior
@@ -128,176 +155,150 @@ class weAverage(weAnalysis):
         if not os.path.isfile("pdist.h5"):
             print("pdist.h5 does not exist. Running w_pdist")
             command = [
-                        "w_pdist",
-                        "-W",
-                        "{}".format(self.h5file_path),
-                        "--first-iter",
-                        "{}".format(self.first_iter),
-                        "--last-iter",
-                        "{}".format(self.last_iter),
-                        "-o",
-                        "pdist.h5",
-                        "-b",
-                        "{}".format(self.bins)
-                    ]
-            # if self.system == 'Windows':
-            #     command += ["--work-manager","threads"]
+                "w_pdist",
+                "-W", "{}".format(self.h5file_path),
+                "--first-iter", "{}".format(self.first_iter),
+                "--last-iter", "{}".format(self.last_iter),
+                "-o", "pdist.h5",
+                "-b", "{}".format(self.bins),
+            ]
             proc = sbpc.Popen(command)
             proc.wait()
         datFile = h5py.File("pdist.h5", "r")
 
+        # Plot options
+        name_fsize   = 6
+        line_width   = 0.15
+        line_color   = "0.75"
         if "plot-opts" in self.opts:
-            plot_opts = self.opts["plot-opts"]
+            plot_opts  = self.opts["plot-opts"]
             name_fsize = self._getd(plot_opts, "name-font-size", default=6)
-            vor_lw = self._getd(plot_opts, "voronoi-lw", default=0.15)
-            vor_col = self._getd(plot_opts, "voronoi-col", default=0.75)
-            vor_col = str(vor_col)
+            line_width = self._getd(plot_opts, "line_width", default=0.15)
+            line_color = str(self._getd(plot_opts, "line-col", default=0.75))
 
         f, axarr = self.setup_figure()
-        # Loop over every dimension vs every other dimension
 
-        # for ii, jj in itt.product(range(self.dims), range(self.dims)):
         for jj in range(self.dims):
-            for ii in range(jj,self.dims):
-                Hists = datFile["histograms"][:]
-                Hists = Hists.mean(axis=0)
+            for ii in range(jj, self.dims):
+                Hists = datFile["histograms"][:].mean(axis=0)
 
-                print("Plotting {} vs {}".format((ii + 1), (jj + 1)))
+                print("Plotting {} vs {}".format(ii + 1, jj + 1))
                 fi, fj = ii + 1, jj + 1
 
-                # It's too messy to plot the spines and ticks for large dimensions
                 for kw in ["top", "right"]:
                     axarr[ii, jj].spines[kw].set_visible(False)
                 axarr[ii, jj].tick_params(left=False, bottom=False)
 
-                # If ii =/= jj, remove jj,ii from upper triangle
                 if ii != jj:
                     for kw in ["top", "bottom", "left", "right"]:
                         axarr[jj, ii].spines[kw].set_visible(False)
                     axarr[jj, ii].set_xticks([])
                     axarr[jj, ii].set_yticks([])
 
-                # Set the names if we are there
                 if fi == self.dims:
-                    # set x label
                     axarr[ii, jj].set_xlabel(self.names[jj], fontsize=name_fsize)
                 if fj == 1:
-                    # set y label
                     axarr[ii, jj].set_ylabel(self.names[ii], fontsize=name_fsize)
 
-                # Check what type of plot we want
                 if fi == fj:
-                    # Set equal widht height
+                    # ---- 1D diagonal plot ----
                     if self.normalize:
                         axarr[ii, jj].set(adjustable="box", aspect="equal")
-                    # plotting the diagonal, 1D plots
                     axes_to_average = tuple(d for d in range(self.dims) if d != ii)
-                    Hists = Hists.mean(axis=axes_to_average)
-
-                    # Normalize the distribution, take -ln, zero out minimum point
-                    Hists = Hists / (Hists.flatten().sum())
-                    # Why was this line even here??
-                    # Hists = Hists / Hists.max()
+                    hist1d = Hists.mean(axis=axes_to_average)
+                    hist1d = hist1d / hist1d.flatten().sum()
                     if self.do_energy:
-                        Hists = -np.log(Hists)
-                    # Hists = Hists - Hists.min()
-
-                    # Calculate the x values, normalize s.t. it spans 0-1
+                        hist1d = -np.log(hist1d)
                     x_mids = datFile["midpoints_{}".format(ii)][...]
                     if self.normalize:
-                        x_mids = x_mids / x_bins.max()
-
-                    # Plot on the correct ax, set x limit
-                    if self.normalize:
+                        x_mids = x_mids / x_mids.max()
                         axarr[ii, jj].set_xlim(0.0, 1.0)
                         axarr[ii, jj].set_ylim(0.0, 1.0)
-                    axarr[ii, jj].plot(x_mids, Hists, label="{} {}".format(fi, fj))
+                    axarr[ii, jj].plot(x_mids, hist1d)
+
+                    # -- Regular bin boundaries on 1D plot --
+                    if self.style == "regular" and self.boundaries is not None:
+                        for bval in self.boundaries[ii]:
+                            axarr[ii, jj].axvline(
+                                x=bval, color=line_color, lw=line_width
+                            )
+
                 else:
-                    # Set equal width height
+                    # ---- 2D heatmap ----
                     if self.normalize:
                         axarr[ii, jj].set(adjustable="box", aspect="equal")
-                    axes_to_average = tuple(d for d in range(self.dims) if d != ii and d != jj)
-                    Hists = Hists.mean(axis=axes_to_average)
-                    Hists = Hists / (Hists.sum())
-                    # Hists = -np.log(Hists)
-                    # Hists = Hists - Hists.min()
-                    # Let's remove the nans and smooth
-                    Hists[np.isnan(Hists)] = np.nanmax(Hists)
+                    axes_to_average = tuple(
+                        d for d in range(self.dims) if d != ii and d != jj
+                    )
+                    hist2d = Hists.mean(axis=axes_to_average)
+                    hist2d = hist2d / hist2d.sum()
+                    hist2d[np.isnan(hist2d)] = np.nanmax(hist2d)
                     if self.do_energy:
-                        Hists = -np.log(Hists)
-                    # Hists = Hists/Hists.max()
+                        hist2d = -np.log(hist2d)
                     if self.data_smoothing_level is not None:
-                        Hists = scipy.ndimage.filters.gaussian_filter(
-                            Hists, self.data_smoothing_level
+                        hist2d = scipy.ndimage.filters.gaussian_filter(
+                            hist2d, self.data_smoothing_level
                         )
-                    # pcolormesh takes in transposed matrices to get
-                    # the expected orientation
-                    e_dist = Hists.T
+                    e_dist = hist2d.T
 
-                    # Get x/y bins, normalize them to 1 max
                     x_bins = datFile["midpoints_{}".format(ii)][...]
-                    x_max = x_bins.max()
+                    y_bins = datFile["midpoints_{}".format(jj)][...]
                     if self.normalize:
+                        x_max = x_bins.max()
+                        y_max = y_bins.max()
                         if x_max != 0:
                             x_bins = x_bins / x_max
-                    y_bins = datFile["midpoints_{}".format(jj)][...]
-                    y_max = y_bins.max()
-                    if self.normalize:
                         if y_max != 0:
                             y_bins = y_bins / y_max
+                        axarr[ii, jj].set_xlim(0.0, 1.0)
+                        axarr[ii, jj].set_ylim(0.0, 1.0)
 
-                    # Set certain values to white to avoid distractions
                     cmap = mpl.cm.magma_r
                     cmap.set_bad(color="white")
                     cmap.set_over(color="white")
                     cmap.set_under(color="white")
 
-                    # Set x/y limits
-                    if self.normalize:
-                        axarr[ii, jj].set_xlim(0.0, 1.0)
-                        axarr[ii, jj].set_ylim(0.0, 1.0)
-
-                    # Plot the heatmap
                     pcolormesh = axarr[ii, jj].pcolormesh(
                         y_bins, x_bins, e_dist, cmap=cmap, vmin=1e-10
                     )
 
                     if self.color_bar:
-                        cbar = f.colorbar(
-                            pcolormesh,
-                            ax=axarr[ii, jj]
-                        )
+                        cbar = f.colorbar(pcolormesh, ax=axarr[ii, jj])
                         cbar.ax.tick_params(labelsize=name_fsize)
 
-                    # Plot vornoi bins if asked
-                    if self.voronoi:
-                        # Get centers from mapper
-                        X = self.mapper.centers[:, ii]
-                        Y = self.mapper.centers[:, jj]
-
-                        # Normalize to 1
-                        if self.normalize:
-                            X = X / y_max
-                            Y = Y / x_max
-
-                        # Ensure not all X/Y values are 0
-                        if not ((X == 0).all() or (Y == 0).all()):
-                            # First plot the centers
-                            axarr[ii, jj].scatter(Y, X, s=0.1)
-
-                            # Now get line segments
-                            segments = utils.voronoi(Y, X)
-                            lines = mpl.collections.LineCollection(
-                                segments, color=vor_col, lw=vor_lw
+                    # -- Regular bin boundaries on 2D plot --
+                    if self.boundaries is not None:
+                        # jj is the x-axis dimension, ii is the y-axis dimension
+                        for bval in self.boundaries[jj]:
+                            axarr[ii, jj].axvline(
+                                x=bval, color=line_color, lw=line_width
+                            )
+                        for bval in self.boundaries[ii]:
+                            axarr[ii, jj].axhline(
+                                y=bval, color=line_color, lw=line_width
                             )
 
-                            # Plot line segments
-                            axarr[ii, jj].add_collection(lines)
-                            axarr[ii, jj].ticklabel_format(style="sci")
+                    # -- Voronoi bins on 2D plot (adaptive) --
+                    if self.plot_boundaries:
+                        try:
+                            X = self.mapper.centers[:, ii]
+                            Y = self.mapper.centers[:, jj]
+                            if self.normalize:
+                                X = X / y_max
+                                Y = Y / x_max
+                            if not ((X == 0).all() or (Y == 0).all()):
+                                axarr[ii, jj].scatter(Y, X, s=0.1)
+                                segments = utils.voronoi(Y, X)
+                                lines = mpl.collections.LineCollection(
+                                    segments, color=line_color, lw=line_width
+                                )
+                                axarr[ii, jj].add_collection(lines)
+                                axarr[ii, jj].ticklabel_format(style="sci")
+                        except Exception:
+                            pass
 
-        # Adjust the figure so that both tick labels and axes labels for subplots fit
-        f.tight_layout(rect=[0.1,0.1,1,1])
-        f.subplots_adjust(hspace=0.3,wspace=0.4,top=0.98,left=0.1,bottom=0.1)
+        f.tight_layout(rect=[0.1, 0.1, 1, 1])
+        f.subplots_adjust(hspace=0.3, wspace=0.4, top=0.98, left=0.1, bottom=0.1)
         for ax in axarr.flat:
             ax.tick_params(axis='both', which='major', labelsize=name_fsize)
 

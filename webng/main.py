@@ -84,9 +84,22 @@ class weBNGBase(cement.Controller):
             (
                 ["--bins"],
                 {
-                    "help": "The binning strategy used. 'adaptive' uses an adaptive voronoi binning scheme as described in Zhang 2010, J Chem Phys, 132. 'regular' constructs rectangular bins using voronoi centers (default: adaptive)",
+                    "help": "The binning strategy used. 'adaptive' uses an adaptive voronoi binning scheme as described in Zhang 2010, J Chem Phys, 132. 'regular' constructs rectangular bins using voronoi centers. 'mabl' employs the minimal adaptive binless scheme described in Bogetti 2025, ACS Omega, 10(25) (default: adaptive)",
                     "default": "adaptive",
-                    "choices": ['adaptive','regular'],
+                    "choices": ['adaptive','regular','mabl'],
+                    "required": False,
+                },
+            ),
+            (
+                ["-t", "--target"],
+                {
+                    "help": (
+                        "Include recycling setup in the template. "
+                        "Adds a 'recycling' block with basis_region and "
+                        "recycle_region fields that work with regular and MABL binning schemes."
+                    ),
+                    "action":   "store_true",
+                    "default":  False,
                     "required": False,
                 },
             )

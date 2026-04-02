@@ -73,6 +73,7 @@ class weTemplater:
         else:
             self.inp_file = args.input
         self.out_file = args.output
+        self.do_target  = args.target
         # setup a template dictionary
         if args.bins == 'adaptive':
             binning_dict = {
@@ -82,14 +83,22 @@ class weTemplater:
                 "max_centers": 300,
                 "traj_per_bin": 10,
             }
+        elif args.bins == 'mabl':
+            binning_dict = {
+                "style": 'mabl',
+                "n_walkers": 50,
+                "n_split": 5,
+                "start": None,
+                "target": None,
+                "coord_weights": None,
+                "block_size": 10
+            }
         else:
             binning_dict = {
                 "style": 'regular',
-                "first_edge": None,
-                "last_edge": None,
-                "num_bins": None,
+                "boundaries": None,
                 "traj_per_bin": 10,
-                "block_size": 10
+                "block_size": 10,
             }
         self.template_dict = {
             "propagator_options": {"propagator_type": "libRoadRunner", "pcoords": None},
@@ -112,8 +121,9 @@ class weTemplater:
                 "work-path": None,
                 "average": {
                     "enabled": False,
+                    "config_file": None,
                     "mapper-iter": None,
-                    "plot-voronoi": False,
+                    "plot-boundaries": False,
                     "plot-energy": False,
                     "normalize": False,
                     "dimensions": None,
@@ -122,8 +132,8 @@ class weTemplater:
                     "color_bar": True,
                     "plot-opts": {
                         "name-font-size": 12,
-                        "voronoi-lw": 1,
-                        "voronoi-col": 0.75,
+                        "line_width": 1,
+                        "line-col": 0.75
                     },
                 },
                 "evolution": {
@@ -148,6 +158,11 @@ class weTemplater:
                     "enabled": False,
                     "step-iter": 10
                 },
+                "flux": {
+                    "enabled": False,
+                    "step-iter": 1,
+                    "output": "flux.png",
+                },
             },
         }
         # adjust dictionary
@@ -167,10 +182,32 @@ class weTemplater:
         pcoords = self._get_pcoords()
         self.template_dict["propagator_options"]["pcoords"] = pcoords
         self.template_dict["sampling_options"]["dimensions"] = len(pcoords)
-        if self.template_dict["binning_options"]["style"] == "regular":
-            self.template_dict["binning_options"]["first_edge"] = [0] * len(pcoords)
-            self.template_dict["binning_options"]["last_edge"] = [50] * len(pcoords)
-            self.template_dict["binning_options"]["num_bins"] = [10] * len(pcoords)
+        style = self.template_dict["binning_options"]["style"]
+
+        if style == "regular":
+                self.template_dict["binning_options"]["boundaries"] = [
+                    [0, 10, 20, 30, 40, 50] for _ in range(len(pcoords))
+                ]
+
+        elif style == "mabl":
+            ndims = len(pcoords)
+            self.template_dict["binning_options"]["start"] = [0] * ndims
+            self.template_dict["binning_options"]["target"] = [50] * ndims
+            self.template_dict["binning_options"]["coord_weights"] = [1] * ndims
+            self.do_target = True
+
+        if self.do_target:
+            recycling_dict = {
+                "basis_region": [
+                        {"observable": p, "min": None, "max": None} for p in pcoords
+                ],
+                "recycle_region": [
+                        {"observable": p, "min": None, "max": None} for p in pcoords
+                ],
+                "traj_length": max(5000, 500 * len(pcoords)),
+            }
+            self.template_dict["recycling"] = recycling_dict
+
         # # update analysis options as well
         # for an_key in self.template_dict["analyses"].keys():
         #     if an_key == "enabled":
