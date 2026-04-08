@@ -752,12 +752,12 @@ class weConvert:
         Write MABL_driver.py into the simulation folder.
 
         Templated constants (from your webng config):
-          MABL_START          : start microstate per dimension
-          MABL_TARGET         : target microstate per dimension (used for scoring)
-          MABL_COORD_WEIGHTS  : per-dimension importance weights
-          MABL_N_SPLIT        : walkers split per iteration
-          MABL_N_MERGE        : always MABL_N_SPLIT + 1
-          MABL_RECYCLE_REGION : [min, max] per dimension box, or None to disable
+        MABL_START          : start microstate per dimension
+        MABL_TARGET         : target microstate per dimension (used for scoring)
+        MABL_COORD_WEIGHTS  : per-dimension importance weights
+        MABL_N_SPLIT        : walkers split per iteration
+        MABL_N_MERGE        : always MABL_N_SPLIT + 1
+        MABL_RECYCLE_REGION : [min, max] per dimension box, or None to disable
         """
         lines = [
             "import logging",
@@ -958,6 +958,8 @@ class weConvert:
             "            for idx in np.argsort(-combined):",
             "                if combined[idx] <= 0:",
             "                    continue",
+            "                if segments[idx].parent_id < 0:",
+            "                    continue",
             "                in_bounds = all(",
             "                    all_pcoords[idx, 0, d] < MABL_TARGET[d]",
             "                    if MABL_TARGET[d] > MABL_START[d]",
@@ -973,10 +975,36 @@ class weConvert:
             "                to_split = np.array([segments[to_split_idx]])[0]",
             "                self._split_by_data(bin, to_split, 2)",
             "",
+            "            # Rebuild after split",
+            "            segments = np.array(",
+            "                sorted(bin, key=operator.attrgetter('weight')),",
+            "                dtype=np.object_",
+            "            )",
+            "            weights     = np.array([s.weight for s in segments])",
+            "            log_weights = -1.0 * np.log(weights)",
+            "            all_pcoords = np.array([s.pcoord for s in segments])",
+            "            nsegs       = len(segments)",
+            "",
+            "            # Recompute scores on fresh segments",
+            "            progresses = np.zeros((nsegs, ndims), dtype=float)",
+            "            for d in range(ndims):",
+            "                span = abs(MABL_START[d] - MABL_TARGET[d])",
+            "                if span == 0:",
+            "                    progresses[:, d] = 1.0",
+            "                    continue",
+            "                for i in range(nsegs):",
+            "                    dist = abs(all_pcoords[i, 0, d] - MABL_TARGET[d]) / span",
+            "                    progresses[i, d] = max(0.0, 1.0 - dist)",
+            "",
+            "            weighted_prog = progresses * np.array(MABL_COORD_WEIGHTS)",
+            "            combined      = np.prod(weighted_prog, axis=1) * (1.0 / log_weights)",
+            "",
             "            # --- Merge bottom MABL_N_MERGE in-bounds walkers ---",
             "            to_merge_idx = []",
             "            for idx in np.argsort(combined):",
             "                if combined[idx] <= 0:",
+            "                    continue",
+            "                if segments[idx].parent_id < 0:",
             "                    continue",
             "                in_bounds = all(",
             "                    all_pcoords[idx, 0, d] < MABL_TARGET[d]",
