@@ -1550,11 +1550,17 @@ class weConvert:
             "#!/usr/bin/env python",
             "import numpy",
             "def pcoord_loader(fieldname, coord_filename, segment, single_point=False):",
-            "    pcoord    = numpy.loadtxt(coord_filename, dtype = numpy.float32)",
+            "    pcoord = numpy.loadtxt(coord_filename, dtype = numpy.float32)",
+            "    # numpy.loadtxt silently collapses to a 1D array whenever the",
+            "    # file has exactly one row OR exactly one column -- don't",
+            "    # assume 2D just because a full trajectory was requested (or",
+            "    # 1D just because a single point was). Force 2D explicitly,",
+            "    # then slice consistently regardless of how many rows loaded.",
+            "    pcoord = numpy.atleast_2d(pcoord)",
             "    if not single_point:",
-            "        segment.pcoord = pcoord[:,1:]",
+            "        segment.pcoord = pcoord[:, 1:]",
             "    else:",
-            "        segment.pcoord = pcoord[1:]",
+            "        segment.pcoord = pcoord[-1, 1:]",
         ]
 
         full_text = "\n".join(lines)
