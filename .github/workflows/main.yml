@@ -67,8 +67,17 @@ jobs:
       # still "0.8.7", same as the stale published wheel -- there's no
       # newer version number to pin to). Remove this step once a PyPI
       # release actually includes the fix.
+      #
+      # --no-build-isolation: PyBioNetGen's own setup.py unconditionally
+      # runs `python -m pip install numpy` at import time (before setup()
+      # even runs). Installing from a git URL forces a source build,
+      # which by default happens in an isolated build sandbox that
+      # doesn't have pip itself available as a module -- that recursive
+      # call then fails with "No module named pip". Building against the
+      # already-active environment (which has both pip and numpy from
+      # the main install step above) avoids this entirely.
       run: |
-        pip install --force-reinstall --no-deps "git+https://github.com/RuleWorld/PyBioNetGen.git"
+        pip install --force-reinstall --no-deps --no-build-isolation "git+https://github.com/RuleWorld/PyBioNetGen.git"
     - name: Test with PyTest
       run: |
         pytest -s
