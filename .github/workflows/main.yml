@@ -56,6 +56,19 @@ jobs:
     - name: Build
       run: |
         pip install .[dev]
+    - name: Override bionetgen with unreleased upstream fix
+      # PyPI's bionetgen==0.8.7 has a real bug in setup_simulator(): it
+      # writes the SBML temp file relative to cwd instead of inside
+      # tmp_folder, then checks for it in tmp_folder -- always fails with
+      # "SBML generation did not produce temp_sbml.xml" for the
+      # libRoadRunner propagator. The fix (RuleWorld/PyBioNetGen, see
+      # bionetgen/modelapi/model.py's setup_simulator) is merged to main
+      # but hasn't shipped in a PyPI release yet (main's VERSION file is
+      # still "0.8.7", same as the stale published wheel -- there's no
+      # newer version number to pin to). Remove this step once a PyPI
+      # release actually includes the fix.
+      run: |
+        pip install --force-reinstall --no-deps "git+https://github.com/RuleWorld/PyBioNetGen.git"
     - name: Test with PyTest
       run: |
         pytest -s
