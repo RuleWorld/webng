@@ -107,3 +107,12 @@ venv.bak/
 
 # temporary
 stest/*
+
+# test folders
+tests/test/
+tests/test_executable/
+tests/test_libRoadRunner/
+tests/test_bng/
+tests/test_setup.yaml
+tests/test_setup_*.yaml
+.pytest_cache/

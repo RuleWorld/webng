@@ -1,31 +1,43 @@
-# This workflows will upload a Python Package using Twine when a release is created
-# For more information see: https://help.github.com/en/actions/language-and-framework-guides/using-python-with-github-actions#publishing-to-package-registries
+# Runs the WEBNG test suite on every push and pull request.
+#
+# macOS is intentionally excluded from the matrix: libssa.so (the bng
+# propagator's shared library) is a Linux ELF binary, so tests that touch
+# the bng propagator cannot run on macOS runners at all. If a macOS build
+# of libssa.so is produced later, macOS can be added back.
+#
+# NOTE: this workflow only runs tests. Publishing to PyPI (twine upload)
+# is still commented out below pending the packaging/versioning decisions
+# tracked separately (see PyPI / distribution items in the dev task list).
 
-name: webng-main
+name: webng-tests
 
-on: 
+on:
   push:
-    branches: [ master ]
+    branches: [ "**" ]
+  pull_request:
+    branches: [ "**" ]
 
 jobs:
-  deploy:
-
-    runs-on: ${{ matrix.os }}
+  test:
+    runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        python-version: [3.7, 3.8, 3.9]
+        # Keep this aligned with the Python version(s) actually used for
+        # WEBNG development (currently 3.10). Expand once compatibility
+        # with newer versions is confirmed (cement/westpa/bionetgen pin
+        # behavior is unverified beyond what's listed here).
+        python-version: ["3.9", "3.10"]
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v4
       with:
         fetch-depth: 0
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v5
       with:
         python-version: ${{ matrix.python-version }}
     - name: Cache pip
-      uses: actions/cache@v2
+      uses: actions/cache@v4
       with:
         path: ~/.cache/pip
         key: ${{ runner.os }}-pip-${{ hashFiles('requirements-dev.txt') }}

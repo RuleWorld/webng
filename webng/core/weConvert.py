@@ -786,7 +786,16 @@ class weConvert:
             "            'libssa.so not found at {}. It should have been copied '",
             "            'into the simulation root by \"webng setup\".'.format(lib_path)",
             "        )",
-            "    lib = ctypes.CDLL(lib_path)",
+            "    try:",
+            "        lib = ctypes.CDLL(lib_path)",
+            "    except OSError as e:",
+            "        raise OSError(",
+            "            'Found libssa.so at {} but could not load it ({}). '",
+            "            'This is almost always a platform/architecture mismatch '",
+            "            '-- e.g. a Linux-built libssa.so on macOS or Windows. '",
+            "            'Rebuild it for this machine with build_libssa.sh.'",
+            "            .format(lib_path, e)",
+            "        ) from e",
             "",
             "    lib.ssa_init.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]",
             "    lib.ssa_init.restype  = ctypes.c_int",
@@ -1059,7 +1068,17 @@ class weConvert:
                 "if missing, build it with build_libssa.sh and set "
                 "propagator_options.libssa_path.".format(lib_path)
             )
-        lib = ctypes.CDLL(lib_path)
+        try:
+            lib = ctypes.CDLL(lib_path)
+        except OSError as e:
+            sys.exit(
+                "[recycling] Found libssa.so at '{}' but could not load it "
+                "({}).\nThis is almost always a platform/architecture "
+                "mismatch — e.g. a Linux-built libssa.so on macOS or "
+                "Windows. Rebuild it for this machine with build_libssa.sh "
+                "and, if needed, point propagator_options.libssa_path at "
+                "the result.".format(lib_path, e)
+            )
 
         lib.ssa_init.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
         lib.ssa_init.restype  = ctypes.c_int
