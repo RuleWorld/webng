@@ -199,8 +199,14 @@ class TestSetupAndRunByPropagator:
 
             # 4. actually run it
             os.chdir(opath)
-            _run_and_check(["./init.sh"], "init.sh")
-            _run_and_check(["w_run", "--serial"], "w_run --serial")
+            # In real usage, a person sources env.sh once in their shell,
+            # then init.sh and w_run inherit exported vars like $RunNet from
+            # that same session. Each subprocess.run call here starts a
+            # fresh process, so env.sh must be re-sourced in each one --
+            # otherwise $RunNet is empty and run_network fails with a
+            # cryptic "-o: command not found" (exit 127).
+            _run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
+            _run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
         finally:
             os.chdir(tfold)
             if os.path.isfile(fpath):
@@ -270,8 +276,8 @@ class TestDefaultSetupAndRun:
     def test_simrun(self):
         fpath = os.path.join(tfold, "test")
         os.chdir(fpath)
-        _run_and_check(["./init.sh"], "init.sh")
-        _run_and_check(["w_run", "--serial"], "w_run --serial")
+        _run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
+        _run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
 
 
 # TODO: Write tests for each analysis module (average/evolution/cluster/
