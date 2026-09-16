@@ -17,6 +17,7 @@ of which one is the current default.
 import os
 import shutil
 import subprocess
+import sys
 
 import pytest
 import yaml
@@ -26,6 +27,36 @@ from webng.main import weBNGTest
 from conftest import requires_bng_lib, BNG_LIB_LOADABLE
 
 tfold = os.path.dirname(__file__)
+
+
+# Markers that mean the run failed even when the exit code is 0. WESTPA has
+# been observed (see propagator investigation) to catch an internal
+# exception, print "exception caught; shutting down", and still exit 0 --
+# checking rc.returncode alone lets that kind of failure silently report as
+# a passing test.
+_FAILURE_MARKERS = ("exception caught", "Traceback (most recent call last)")
+
+
+def _run_and_check(cmd, step_name):
+    """
+    Run a subprocess, print its output (so -s still shows it), and fail
+    the test if either the exit code is nonzero OR the output contains a
+    failure marker WESTPA prints even on an exit code of 0.
+    """
+    rc = subprocess.run(cmd, capture_output=True, text=True)
+    if rc.stdout:
+        print(rc.stdout)
+    if rc.stderr:
+        print(rc.stderr, file=sys.stderr)
+    combined = (rc.stdout or "") + (rc.stderr or "")
+    assert rc.returncode == 0, "{} exited with code {}".format(step_name, rc.returncode)
+    for marker in _FAILURE_MARKERS:
+        assert marker not in combined, (
+            "{} exited 0 but its output contains {!r} -- this masks a "
+            "real failure inside the run (see captured output above)".format(
+                step_name, marker
+            )
+        )
 
 
 def test_webng():
@@ -142,10 +173,8 @@ class TestSetupAndRunByPropagator:
 
             # 4. actually run it
             os.chdir(opath)
-            rc = subprocess.run(["./init.sh"])
-            assert rc.returncode == 0
-            rc = subprocess.run(["w_run", "--serial"])
-            assert rc.returncode == 0
+            _run_and_check(["./init.sh"], "init.sh")
+            _run_and_check(["w_run", "--serial"], "w_run --serial")
         finally:
             os.chdir(tfold)
             if os.path.isfile(fpath):
@@ -215,10 +244,8 @@ class TestDefaultSetupAndRun:
     def test_simrun(self):
         fpath = os.path.join(tfold, "test")
         os.chdir(fpath)
-        rc = subprocess.run(["./init.sh"])
-        assert rc.returncode == 0
-        rc = subprocess.run(["w_run", "--serial"])
-        assert rc.returncode == 0
+        _run_and_check(["./init.sh"], "init.sh")
+        _run_and_check(["w_run", "--serial"], "w_run --serial")
 
 
 # TODO: Write tests for each analysis module (average/evolution/cluster/
