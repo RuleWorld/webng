@@ -172,11 +172,14 @@ class TestDefaultSetupAndRun:
         if os.path.isdir(opath):
             shutil.rmtree(opath)
 
-    @pytest.fixture(autouse=True)
+    @pytest.fixture(autouse=True, scope="class")
     def _cleanup(self):
-        # clean up any stale test/ folder from a previous crashed run
-        # BEFORE we start, not just after — otherwise a leftover from an
-        # earlier failure causes a FileExistsError on this run too.
+        # class-scoped: runs ONCE before the first test in this class and
+        # ONCE after the last one — NOT between test_setup and
+        # test_simrun, which share state (test_setup creates tests/test/,
+        # test_simrun depends on it still being there). A per-test-method
+        # scope here would delete tests/test/ right after test_setup
+        # finishes, before test_simrun ever runs.
         self._remove_default_artifacts()
         yield
         self._remove_default_artifacts()

@@ -1577,7 +1577,15 @@ class weConvert:
             "  env | sort",
             "fi",
             "cd $WEST_SIM_ROOT",
-            "cat bngl_conf/init.gdat > $WEST_PCOORD_RETURN",
+            # get_pcoord.sh is only ever used for single-point pcoord
+            # acquisition (basis states, gen_istate) — never for a full
+            # segment trajectory (that's runseg.sh's job). init.gdat can
+            # have multiple rows (BNG's own probe simulation may use
+            # several timepoints), so grab only the last/current one;
+            # cat-ing the whole file here fed the single_point branch of
+            # aux_functions.pcoord_loader a 2D array when it expects a
+            # single 1D row, causing a pcoord shape mismatch.
+            "tail -n 1 bngl_conf/init.gdat > $WEST_PCOORD_RETURN",
             'if [ -n "$SEG_DEBUG" ] ; then',
             "  head -v $WEST_PCOORD_RETURN",
             "fi",

@@ -16,6 +16,7 @@ on:
     branches: [ "**" ]
   pull_request:
     branches: [ "**" ]
+  workflow_dispatch: {}
 
 jobs:
   test:
@@ -53,6 +54,13 @@ jobs:
     - name: Test with PyTest
       run: |
         pytest -s
+    - name: Debug BNG2.pl SBML export (diagnostic for libRoadRunner failure)
+      # Runs regardless of whether pytest passed, so this always shows up
+      # even if the SBML-related test above failed. See
+      # .github/scripts/debug_sbml.py for what this does and why.
+      if: always()
+      run: |
+        python .github/scripts/debug_sbml.py
 # python setup.py install
 # python setup.py sdist bdist_wheel
 # pip install numpy
