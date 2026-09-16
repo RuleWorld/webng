@@ -2121,6 +2121,9 @@ class weConvert:
             "  fi",
             "  tail -n 1 parent.gdat > $WEST_PCOORD_RETURN",
             "  cat seg.gdat >> $WEST_PCOORD_RETURN",
+            '  echo "runseg.sh: wrote to WEST_PCOORD_RETURN=$WEST_PCOORD_RETURN '
+            'size=$(wc -c < "$WEST_PCOORD_RETURN" 2>/dev/null || echo missing) '
+            'lines=$(wc -l < "$WEST_PCOORD_RETURN" 2>/dev/null || echo missing) (CONTINUES)" >&2',
             'elif [ "$WEST_CURRENT_SEG_INITPOINT_TYPE" = "SEG_INITPOINT_NEWTRAJ" ]; then',
             "  if [[ -n $SCRATCH ]];then",
             "    cp $WEST_PARENT_DATA_REF ./parent.net",
@@ -2149,6 +2152,9 @@ class weConvert:
             "    exit 1",
             "  fi",
             "  cat seg.gdat > $WEST_PCOORD_RETURN",
+            '  echo "runseg.sh: wrote to WEST_PCOORD_RETURN=$WEST_PCOORD_RETURN '
+            'size=$(wc -c < "$WEST_PCOORD_RETURN" 2>/dev/null || echo missing) '
+            'lines=$(wc -l < "$WEST_PCOORD_RETURN" 2>/dev/null || echo missing) (NEWTRAJ)" >&2',
             "fi",
             "if [[ -n $SCRATCH ]];then",
             "  cp ${SCRATCH}/$WEST_CURRENT_SEG_DATA_REF/seg_end.net $WEST_CURRENT_SEG_DATA_REF/.",
