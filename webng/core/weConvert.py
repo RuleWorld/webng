@@ -1548,9 +1548,10 @@ class weConvert:
         """
         lines = [
             "#!/usr/bin/env python",
-            "import numpy",
+            "import numpy, os, sys",
             "def pcoord_loader(fieldname, coord_filename, segment, single_point=False):",
             "    pcoord = numpy.loadtxt(coord_filename, dtype = numpy.float32)",
+            "    raw_shape = pcoord.shape",
             "    # numpy.loadtxt silently collapses to a 1D array whenever the",
             "    # file has exactly one row OR exactly one column -- don't",
             "    # assume 2D just because a full trajectory was requested (or",
@@ -1561,6 +1562,32 @@ class weConvert:
             "        segment.pcoord = pcoord[:, 1:]",
             "    else:",
             "        segment.pcoord = pcoord[-1, 1:]",
+            "    # DEBUG: every shell-level check upstream (run_network exit code,",
+            "    # seg.gdat non-empty, seg.gdat has non-comment data rows) has",
+            "    # passed, yet segments still end up with an empty pcoord -- this",
+            "    # traces exactly what this function sees and produces, gated on",
+            "    # the SEG_DEBUG/PROPAGATION_DEBUG env vars already set in west.cfg.",
+            "    if os.environ.get('SEG_DEBUG') or os.environ.get('PROPAGATION_DEBUG'):",
+            "        sys.stderr.write(",
+            "            'pcoord_loader: coord_filename={} single_point={} '"
+            "            'raw_loadtxt_shape={} after_atleast_2d_shape={} '"
+            "            'final_pcoord_shape={}\\n'.format(",
+            "                coord_filename, single_point, raw_shape, pcoord.shape,",
+            "                segment.pcoord.shape",
+            "            )",
+            "        )",
+            "        try:",
+            "            with open(coord_filename) as fh:",
+            "                content = fh.read()",
+            "            sys.stderr.write(",
+            "                '--- {} contents ---\\n{}\\n--- end {} ---\\n'.format(",
+            "                    coord_filename, content, coord_filename",
+            "                )",
+            "            )",
+            "        except Exception as e:",
+            "            sys.stderr.write(",
+            "                'could not read {} for debug: {}\\n'.format(coord_filename, e)",
+            "            )",
         ]
 
         full_text = "\n".join(lines)
