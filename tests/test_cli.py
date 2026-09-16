@@ -37,6 +37,31 @@ tfold = os.path.dirname(__file__)
 _FAILURE_MARKERS = ("exception caught", "Traceback (most recent call last)")
 
 
+def _dump_seg_logs():
+    """
+    WESTPA's executable propagator redirects each segment's runseg.sh
+    stdout/stderr to its own file under seg_logs/{iter:06d}-{seg:06d}.log
+    (see _executable_westcfg) -- none of that ever reaches this process's
+    own stdout/stderr, so every diagnostic runseg.sh prints is otherwise
+    invisible here. Dump them explicitly so they actually show up.
+    """
+    if not os.path.isdir("seg_logs"):
+        return
+    log_files = sorted(os.listdir("seg_logs"))
+    if not log_files:
+        print("seg_logs/ exists but is empty")
+        return
+    for name in log_files:
+        path = os.path.join("seg_logs", name)
+        print("--- seg_logs/{} ---".format(name))
+        try:
+            with open(path) as f:
+                print(f.read())
+        except Exception as e:
+            print("could not read {}: {}".format(path, e))
+        print("--- end seg_logs/{} ---".format(name))
+
+
 def _run_and_check(cmd, step_name):
     """
     Run a subprocess, print its output (so -s still shows it), and fail
@@ -48,6 +73,7 @@ def _run_and_check(cmd, step_name):
         print(rc.stdout)
     if rc.stderr:
         print(rc.stderr, file=sys.stderr)
+    _dump_seg_logs()
     combined = (rc.stdout or "") + (rc.stderr or "")
     assert rc.returncode == 0, "{} exited with code {}".format(step_name, rc.returncode)
     for marker in _FAILURE_MARKERS:
