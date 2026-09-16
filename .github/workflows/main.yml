@@ -33,7 +33,7 @@ jobs:
         # WEBNG development (currently 3.10). Expand once compatibility
         # with newer versions is confirmed (cement/westpa/bionetgen pin
         # behavior is unverified beyond what's listed here).
-        python-version: ["3.9", "3.10"]
+        python-version: ["3.10"]
     steps:
     - uses: actions/checkout@v4
       with:
