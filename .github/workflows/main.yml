@@ -78,6 +78,18 @@ jobs:
       # the main install step above) avoids this entirely.
       run: |
         pip install --force-reinstall --no-deps --no-build-isolation "git+https://github.com/RuleWorld/PyBioNetGen.git"
+    - name: Patch bionetgen write_xml cwd bug (not fixed upstream yet)
+      # A second, separate instance of the same cwd-mismatch bug class:
+      # write_xml() in bngfile.py runs BNG2.pl with cwd=temp_folder, then
+      # checks/reads its output using a bare relative filename (resolved
+      # against this process's cwd, not temp_folder) -- so it never finds
+      # what BNG2.pl actually wrote. This is what's actually producing
+      # "SBML generation did not produce temp_sbml.xml" for the
+      # libRoadRunner propagator; the upstream fix already merged to
+      # model.py doesn't touch this function. Not yet reported upstream.
+      # Remove this step once RuleWorld/PyBioNetGen has its own fix.
+      run: |
+        python .github/scripts/patch_bionetgen_write_xml_cwd.py
     - name: Test with PyTest
       run: |
         pytest -s
