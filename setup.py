@@ -38,7 +38,7 @@ setup(
     url="https://github.com/ASinanSaglam/BNG_WESTPA_pipeline",
     license="unlicensed",
     packages=find_packages(exclude=["ez_setup", "tests*"]),
-    package_data={"webng": ["templates/*"]},
+    package_data={"webng": ["templates/*", "assets/*"]},
     include_package_data=True,
     install_requires=INSTALL_REQUIRES,
     extras_require=EXTRAS_REQUIRE,

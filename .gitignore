@@ -5,6 +5,7 @@ __pycache__/
 
 # C extensions
 *.so
+!webng/assets/libssa.so
 
 # Distribution / packaging
 .Python

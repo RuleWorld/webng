@@ -4,7 +4,7 @@ try:
 except ImportError:
     from yaml import Loader, Dumper
 
-import yaml, os, shutil, sys, westpa, bionetgen, platform, stat, warnings
+import yaml, os, shutil, sys, westpa, bionetgen, platform, stat, warnings, ctypes, random
 import numpy as np
 import nbformat as nbf
 
@@ -47,10 +47,17 @@ class weConvert:
         # Propagator options
         propagator_options = self._getd(self.opts, "propagator_options")
         self.propagator_type = self._getd(
-            propagator_options, "propagator_type", default="executable"
+            propagator_options, "propagator_type", default="bng"
         )
-        if self.propagator_type == "libRoadRunner":
+        if self.propagator_type in ("libRoadRunner", "bng"):
             self.pcoord_list = self._getd(propagator_options, "pcoords")
+        if self.propagator_type == "bng":
+            self.libssa_path = self._getd(
+                propagator_options, "libssa_path", default=None, required=False
+            )
+            self.gillespie_update_interval = self._getd(
+                propagator_options, "gillespie_update_interval", default=1
+            )
 
         # we need to find WESTPA and BNG
         self.system = platform.system()
@@ -229,7 +236,9 @@ class weConvert:
     def _parse_net_groups(self, net_path):
         """
         Parse begin groups block.
-        Returns dict: observable_name -> list of 1-based species indices.
+        Returns dict: observable_name -> [(0-based species index, coefficient), ...].
+        Every term in the group is kept (weighted sum), not just the first
+        listed species — a group like "2*3,5*7" means 2*species3 + 5*species7.
         """
         groups, in_block = {}, False
         with open(net_path) as f:
@@ -242,18 +251,21 @@ class weConvert:
                 if in_block and s and not s.startswith("#"):
                     parts = s.split()
                     if len(parts) >= 3:
-                        obs_name   = parts[1]
-                        sp_indices = []
+                        obs_name = parts[1]
+                        terms = []
                         for token in parts[2].split(","):
                             token = token.strip()
                             if "*" in token:
-                                token = token.split("*")[1]
+                                coeff_str, idx_str = token.split("*", 1)
+                                coeff = float(coeff_str)
+                            else:
+                                idx_str, coeff = token, 1.0
                             try:
-                                sp_indices.append(int(token))
+                                terms.append((int(idx_str) - 1, coeff))
                             except ValueError:
                                 pass
-                        if sp_indices:
-                            groups[obs_name] = sp_indices
+                        if terms:
+                            groups[obs_name] = terms
         return groups
 
     def _write_net_with_species(self, template_net, out_path, new_counts):
@@ -286,9 +298,9 @@ class weConvert:
 
     def sample_basis_states(self):
         """
-        Run a long SSA via libRoadRunner, filter frames that satisfy
-        basis_region conditions (evaluated on pcoords using the groups
-        mapping from init.net), and write:
+        Filter frames from a long SSA trajectory that satisfy basis_region
+        conditions (evaluated on pcoords using the groups mapping from
+        init.net), and write:
 
           bstates/microstate_pool.dat  — one line per valid frame: <weight> <sp1> <sp2> ... <spN>
           bstates/0.net                — placeholder required by w_init
@@ -296,10 +308,15 @@ class weConvert:
 
         If recycling is disabled, copies init.net → 0.net as before and
         writes the single-entry bstates.txt.
+
+        The sampling trajectory itself is run with whichever engine the
+        main propagator already uses — the bng shared library if
+        propagator_type == "bng" (fast, no libRoadRunner/SBML needed),
+        otherwise libRoadRunner (used for both the "libRoadRunner" and
+        "executable" propagator types, matching prior behavior).
         """
         bstates_dir = "bstates"
         init_net    = "bngl_conf/init.net"
-        init_xml    = "bngl_conf/init.xml"
 
         # no recycle: single basis state
         if not self.do_recycling:
@@ -307,7 +324,7 @@ class weConvert:
             self._write_bstatestxt(n=1)
             return
 
-        # validate pcoords against net files
+        # validate pcoords against net files (shared by both engines)
         groups      = self._parse_net_groups(init_net)
         ref_species = self._parse_net_species(init_net)
         n_species   = len(ref_species)
@@ -320,13 +337,111 @@ class weConvert:
                         obs, init_net, list(groups.keys()))
                 )
 
-        # run SSA using libRoadRunner
+        if self.propagator_type == "bng":
+            self._sample_basis_states_bng(init_net, groups, n_species)
+        else:
+            self._sample_basis_states_libRR(init_net, groups, n_species)
+
+    def _sample_basis_states_bng(self, init_net, groups, n_species):
+        """
+        Basis-state sampling using the bng shared library (libssa.so)
+        directly via ctypes — no init.xml/SBML export needed. Used when
+        propagator_type == "bng", so users running with bng don't need a
+        libRoadRunner install or a redundant XML export just for this
+        one-time setup step.
+        """
+        lib = self._load_bng_lib_for_sampling()
+        seed = random.randint(0, 2**14)
+        status = lib.ssa_init(
+            init_net.encode(), seed, self.gillespie_update_interval
+        )
+        if status != 0:
+            err = lib.ssa_get_last_error().decode()
+            sys.exit("[recycling] ssa_init failed: {}".format(err))
+        lib_n_species = lib.ssa_get_n_species()
+        if lib_n_species != n_species:
+            sys.exit(
+                "[recycling] species count mismatch: .net file has {} but "
+                "bng library reports {}.".format(n_species, lib_n_species)
+            )
+
+        print("[recycling] Running sampling trajectory ({} steps) via bng …".format(
+            self.bs_traj_length))
+        num_ts = self.bs_traj_length + 1
+        buf = (ctypes.c_double * (num_ts * n_species))()
+        status = lib.ssa_run_multi(0.0, float(self.bs_traj_length), num_ts, buf, n_species)
+        if status != 0:
+            err = lib.ssa_get_last_error().decode()
+            sys.exit("[recycling] ssa_run_multi failed: {}".format(err))
+        all_states = np.ctypeslib.as_array(buf).reshape(num_ts, n_species)
+
+        bstates_dir = "bstates"
+
+        # compute each basis_region observable as the weighted sum of its
+        # group's species terms, across every sampled frame
+        pcoord_cols = {}
+        for cond in self.basis_region:
+            obs   = cond["observable"]
+            terms = groups[obs]
+            pcoord_cols[obs] = sum(coeff * all_states[:, idx] for idx, coeff in terms)
+
+        mask = np.ones(num_ts, dtype=bool)
+        for cond in self.basis_region:
+            col = pcoord_cols[cond["observable"]]
+            if "min" in cond:
+                mask &= col >= cond["min"]
+            if "max" in cond:
+                mask &= col <= cond["max"]
+        valid_idx = np.where(mask)[0]
+        n_valid   = len(valid_idx)
+        if n_valid == 0:
+            warnings.warn(
+                "[recycling] No trajectory frames satisfied basis_region "
+                "conditions.\n  Conditions: {}\n"
+                "  Falling back to single basis state from init.net.\n"
+                "  Try increasing traj_length or relaxing basis_region.".format(
+                    self.basis_region)
+            )
+            shutil.copyfile(init_net, os.path.join(bstates_dir, "0.net"))
+            self._write_bstatestxt(n=1)
+            return
+        print("[recycling] Found {} valid frames for basis_region.".format(n_valid))
+        pool_path = os.path.join(bstates_dir, "microstate_pool.dat")
+        # Weight = 1.0 for all frames (uniform over valid frames).
+        # TODO Future enhancement: weight by dwell time for equilibrium sampling.
+        with open(pool_path, "w") as pf:
+            pf.write("# weight " +
+                     " ".join("sp{}".format(i+1) for i in range(n_species)) + "\n")
+            for idx in valid_idx:
+                counts = all_states[idx]
+                count_strs = " ".join(
+                    ("{:.0f}" if c == int(c) else "{:.6g}").format(c) for c in counts
+                )
+                pf.write("1.0 {}\n".format(count_strs))
+        print("[recycling] Wrote {} microstates to {}.".format(n_valid, pool_path))
+        for cond in self.basis_region:
+            col = pcoord_cols[cond["observable"]][valid_idx]
+            print("[recycling]   {}: min={:.1f}  max={:.1f}  mean={:.1f}".format(
+                cond["observable"], col.min(), col.max(), col.mean()))
+        shutil.copyfile(init_net, os.path.join(bstates_dir, "0.net"))
+        self._write_bstatestxt(n=1)
+
+    def _sample_basis_states_libRR(self, init_net, groups, n_species):
+        """
+        Basis-state sampling using libRoadRunner. Used for propagator_type
+        in {"libRoadRunner", "executable"}. Observable values come from
+        RoadRunner's own SBML-based evaluation (rr.timeCourseSelections),
+        so — unlike the bng path — no manual group-weighting is needed here;
+        `groups` is accepted for signature symmetry but unused.
+        """
+        init_xml = "bngl_conf/init.xml"
+        bstates_dir = "bstates"
         try:
             import roadrunner as librr
         except ImportError:
             sys.exit("[recycling] libRoadRunner is required for basis-state "
                      "sampling but is not installed.")
-        print("[recycling] Running sampling trajectory ({} steps) …".format(
+        print("[recycling] Running sampling trajectory ({} steps) via libRoadRunner …".format(
             self.bs_traj_length))
         rr = librr.RoadRunner(init_xml)
         rr.setIntegrator("gillespie")
@@ -652,6 +767,316 @@ class weConvert:
         full_text = "\n".join(lines)
         with open("libRR_propagator.py", "w") as f:
             f.write(full_text)
+
+    def _write_bngPropagator(self):
+        lines = [
+            "from __future__ import division, print_function; __metaclass__ = type",
+            "import numpy as np",
+            "import ctypes, os, time, random, logging",
+            "from westpa.core.propagators import WESTPropagator",
+            "log = logging.getLogger(__name__)",
+            "log.debug('loading module %r' % __name__)",
+            "",
+            "",
+            "def _load_bng_lib():",
+            "    here = os.path.dirname(os.path.abspath(__file__))",
+            "    lib_path = os.path.join(here, 'libssa.so')",
+            "    if not os.path.isfile(lib_path):",
+            "        raise FileNotFoundError(",
+            "            'libssa.so not found at {}. It should have been copied '",
+            "            'into the simulation root by \"webng setup\".'.format(lib_path)",
+            "        )",
+            "    lib = ctypes.CDLL(lib_path)",
+            "",
+            "    lib.ssa_init.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]",
+            "    lib.ssa_init.restype  = ctypes.c_int",
+            "",
+            "    lib.ssa_set_state.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int]",
+            "    lib.ssa_set_state.restype  = ctypes.c_int",
+            "",
+            "    lib.ssa_run.argtypes = [ctypes.c_double, ctypes.c_double]",
+            "    lib.ssa_run.restype  = ctypes.c_int",
+            "",
+            "    lib.ssa_run_multi.argtypes = [",
+            "        ctypes.c_double, ctypes.c_double, ctypes.c_int,",
+            "        ctypes.POINTER(ctypes.c_double), ctypes.c_int,",
+            "    ]",
+            "    lib.ssa_run_multi.restype = ctypes.c_int",
+            "",
+            "    lib.ssa_get_state.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int]",
+            "    lib.ssa_get_state.restype  = ctypes.c_int",
+            "",
+            "    lib.ssa_get_n_species.argtypes = []",
+            "    lib.ssa_get_n_species.restype  = ctypes.c_int",
+            "",
+            "    lib.ssa_get_last_error.argtypes = []",
+            "    lib.ssa_get_last_error.restype  = ctypes.c_char_p",
+            "",
+            "    lib.ssa_reseed.argtypes = [ctypes.c_int]",
+            "    lib.ssa_reseed.restype  = None",
+            "    return lib",
+            "",
+            "",
+            "def _parse_net_groups(net_file):",
+            "    '''",
+            "    Parse the 'begin groups' block of a .net file into",
+            "    {observable_name: [(0-based species index, coefficient), ...]}.",
+            "    Handles both bare indices ('3') and weighted terms ('2*3'),",
+            "    and sums over every term rather than assuming a single species.",
+            "    '''",
+            "    groups, in_block = {}, False",
+            "    with open(net_file) as f:",
+            "        for line in f:",
+            "            s = line.strip()",
+            "            if s.startswith('begin groups'):",
+            "                in_block = True",
+            "                continue",
+            "            if s.startswith('end groups'):",
+            "                break",
+            "            if in_block and s and not s.startswith('#'):",
+            "                parts = s.split()",
+            "                if len(parts) >= 3:",
+            "                    name  = parts[1]",
+            "                    terms = []",
+            "                    for token in parts[2].split(','):",
+            "                        token = token.strip()",
+            "                        if '*' in token:",
+            "                            coeff_str, idx_str = token.split('*', 1)",
+            "                            coeff = float(coeff_str)",
+            "                        else:",
+            "                            idx_str, coeff = token, 1.0",
+            "                        try:",
+            "                            terms.append((int(idx_str) - 1, coeff))",
+            "                        except ValueError:",
+            "                            pass",
+            "                    if terms:",
+            "                        groups[name] = terms",
+            "    return groups",
+            "",
+            "",
+            "def _parse_net_species_counts(net_file, n_species):",
+            "    '''Return a length-n_species array of initial counts from the .net file.'''",
+            "    counts = np.zeros(n_species, dtype=np.float64)",
+            "    in_block = False",
+            "    with open(net_file) as f:",
+            "        for line in f:",
+            "            s = line.strip()",
+            "            if s.startswith('begin species'):",
+            "                in_block = True",
+            "                continue",
+            "            if s.startswith('end species'):",
+            "                break",
+            "            if in_block and s and not s.startswith('#'):",
+            "                parts = s.split()",
+            "                if len(parts) >= 3:",
+            "                    idx = int(parts[0]) - 1",
+            "                    counts[idx] = float(parts[2])",
+            "    return counts",
+            "",
+            "",
+            "class bngPropagator(WESTPropagator):",
+            "    def __init__(self, rc=None):",
+            "        super(bngPropagator, self).__init__(rc)",
+            "        config = self.rc.config",
+            "        for key in [('west', 'bng', 'init', 'net_file'),",
+            "                    ('west', 'bng', 'init', 'init_time_step'),",
+            "                    ('west', 'bng', 'init', 'final_time_step'),",
+            "                    ('west', 'bng', 'init', 'num_time_step'),",
+            "                    ('west', 'bng', 'data', 'pcoords')]:",
+            "            config.require(key)",
+            "",
+            "        self.net_file    = os.path.normpath(config['west', 'bng', 'init', 'net_file'])",
+            "        self.t_start     = float(config['west', 'bng', 'init', 'init_time_step'])",
+            "        self.t_end       = float(config['west', 'bng', 'init', 'final_time_step'])",
+            "        self.num_ts      = int(config['west', 'bng', 'init', 'num_time_step'])",
+            "        self.pcoord_keys = config['west', 'bng', 'data', 'pcoords']",
+            "        self.gillespie_update_interval = int(",
+            "            config.get(('west', 'bng', 'init', 'gillespie_update_interval'), 1)",
+            "        )",
+            "",
+            "        self._lib = _load_bng_lib()",
+            "        seed = random.randint(0, 2**14)",
+            "        status = self._lib.ssa_init(",
+            "            self.net_file.encode(), seed, self.gillespie_update_interval",
+            "        )",
+            "        if status != 0:",
+            "            err = self._lib.ssa_get_last_error().decode()",
+            "            raise RuntimeError('bngPropagator: ssa_init failed: {}'.format(err))",
+            "",
+            "        self._n_species = self._lib.ssa_get_n_species()",
+            "        log.info('bngPropagator initialized: %d species, net_file=%s',",
+            "                 self._n_species, self.net_file)",
+            "",
+            "        # Observable definitions: name -> [(species_idx, coeff), ...].",
+            "        # Every term in the group is summed — this is NOT just the",
+            "        # first listed species, so multi-species / weighted",
+            "        # observables (e.g. 'Group(2) A + Group(3) B') come out correct.",
+            "        group_map = _parse_net_groups(self.net_file)",
+            "        self._pcoord_terms = []",
+            "        for key in self.pcoord_keys:",
+            "            if key in group_map:",
+            "                self._pcoord_terms.append(group_map[key])",
+            "            else:",
+            "                log.warning(",
+            "                    'pcoord key %r not found as an observable in %s; '",
+            "                    'treating it as a bare 1-based species index.',",
+            "                    key, self.net_file)",
+            "                self._pcoord_terms.append([(int(key) - 1, 1.0)])",
+            "",
+            "        init_counts = _parse_net_species_counts(self.net_file, self._n_species)",
+            "        self._initial_pcoord = self._weighted_pcoord(init_counts)",
+            "",
+            "        # Pre-allocate buffers",
+            "        self._multi_buf = np.zeros(self.num_ts * self._n_species, dtype=np.float64)",
+            "        self._state_buf = np.zeros(self._n_species, dtype=np.float64)",
+            "",
+            "    def _weighted_pcoord(self, state):",
+            "        '''Each observable is the weighted sum of its species terms.'''",
+            "        out = np.zeros(len(self._pcoord_terms), dtype=np.float32)",
+            "        for j, terms in enumerate(self._pcoord_terms):",
+            "            out[j] = sum(coeff * state[idx] for idx, coeff in terms)",
+            "        return out",
+            "",
+            "    def get_pcoord(self, state):",
+            "        state.pcoord = self._initial_pcoord.copy()",
+            "",
+            "    def gen_istate(self, basis_state, initial_state):",
+            "        initial_state.pcoord = self._initial_pcoord.copy()",
+            "        return initial_state",
+            "",
+            "    def propagate(self, segments):",
+            "        for segment in segments:",
+            "            starttime = time.time()",
+            "            piter = segment.n_iter - 1",
+            "            seed  = random.randint(0, 2**14)",
+            "",
+            "            if piter == 0:",
+            "                self._lib.ssa_reseed(seed)",
+            "            else:",
+            "                restart = segment.data.get('restart_state')",
+            "                if restart is not None and not all(x == -1 for x in restart):",
+            "                    state_arr = np.array(restart, dtype=np.float64)",
+            "                    ptr = state_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double))",
+            "                    self._lib.ssa_set_state(ptr, self._n_species)",
+            "                    self._lib.ssa_reseed(seed)",
+            "                else:",
+            "                    pool_ms = segment.data.get('pool_microstate', None)",
+            "                    if pool_ms is not None:",
+            "                        state_arr = np.array(pool_ms, dtype=np.float64)",
+            "                        if len(state_arr) != self._n_species:",
+            "                            log.warning(",
+            "                                'pool_microstate length %d != expected %d; '",
+            "                                'zero-padding.', len(state_arr), self._n_species)",
+            "                            full = np.zeros(self._n_species, dtype=np.float64)",
+            "                            full[:len(state_arr)] = state_arr",
+            "                            state_arr = full",
+            "                        ptr = state_arr.ctypes.data_as(ctypes.POINTER(ctypes.c_double))",
+            "                        self._lib.ssa_set_state(ptr, self._n_species)",
+            "                    self._lib.ssa_reseed(seed)",
+            "",
+            "            if self.num_ts == 2:",
+            "                status = self._lib.ssa_run(self.t_start, self.t_end)",
+            "                if status != 0:",
+            "                    err = self._lib.ssa_get_last_error().decode()",
+            "                    log.warning('ssa_run returned %d: %s', status, err)",
+            "",
+            "                ptr = self._state_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_double))",
+            "                self._lib.ssa_get_state(ptr, self._n_species)",
+            "",
+            "                pcoord = np.zeros((2, len(self.pcoord_keys)), dtype=np.float32)",
+            "                pcoord[0] = self._initial_pcoord",
+            "                pcoord[1] = self._weighted_pcoord(self._state_buf)",
+            "            else:",
+            "                out_ptr = self._multi_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_double))",
+            "                status = self._lib.ssa_run_multi(",
+            "                    self.t_start, self.t_end, self.num_ts, out_ptr, self._n_species",
+            "                )",
+            "                if status != 0:",
+            "                    err = self._lib.ssa_get_last_error().decode()",
+            "                    log.warning('ssa_run_multi returned %d: %s', status, err)",
+            "",
+            "                all_states = self._multi_buf.reshape(self.num_ts, self._n_species)",
+            "                pcoord = np.zeros((self.num_ts, len(self.pcoord_keys)), dtype=np.float32)",
+            "                for ts in range(self.num_ts):",
+            "                    pcoord[ts] = self._weighted_pcoord(all_states[ts])",
+            "                self._state_buf[:] = all_states[-1]",
+            "",
+            "            segment.data['final_state'] = self._state_buf.copy()",
+            "            segment.data['seed']        = seed",
+            "            segment.data.pop('pool_microstate', None)",
+            "            segment.pcoord   = pcoord",
+            "            segment.walltime = time.time() - starttime",
+            "            segment.cputime  = 0",
+            "            segment.status   = segment.SEG_STATUS_COMPLETE",
+            "        return segments",
+        ]
+        full_text = "\n".join(lines)
+        with open("bng_propagator.py", "w") as f:
+            f.write(full_text)
+
+    def _resolve_bng_lib_path(self):
+        """
+        Where to find libssa.so:
+          1. propagator_options.libssa_path, if the user set one (e.g. a
+             custom local build), or
+          2. the copy bundled with the WEBNG package at webng/assets/libssa.so.
+        """
+        if getattr(self, "libssa_path", None):
+            return self.libssa_path
+        core_dir = os.path.dirname(os.path.abspath(__file__))   # webng/core
+        pkg_root = os.path.dirname(core_dir)                    # webng/
+        return os.path.join(pkg_root, "assets", "libssa.so")
+
+    def _copy_bng_lib(self):
+        """
+        Copies libssa.so into the simulation root, alongside
+        bng_propagator.py. ctypes.CDLL is loaded relative to the
+        propagator's __file__, so the two must be co-located.
+        """
+        src = self._resolve_bng_lib_path()
+        if not os.path.isfile(src):
+            sys.exit(
+                "Could not find libssa.so at '{}'.\n"
+                "It should ship bundled with WEBNG at webng/assets/libssa.so; "
+                "if you're running from a source checkout that doesn't have "
+                "it yet, build it with build_libssa.sh and set "
+                "propagator_options.libssa_path to the result.".format(src)
+            )
+        shutil.copyfile(src, "libssa.so")
+
+    def _load_bng_lib_for_sampling(self):
+        """
+        Loads libssa.so directly into this (weConvert) process via ctypes,
+        for one-time basis-state sampling at setup time. This is separate
+        from the copy written into the sim folder for the per-segment
+        propagator to use at run time — same resolution rule, same file.
+        """
+        lib_path = self._resolve_bng_lib_path()
+        if not os.path.isfile(lib_path):
+            sys.exit(
+                "[recycling] Could not find libssa.so at '{}'.\n"
+                "It should ship bundled with WEBNG at webng/assets/libssa.so; "
+                "if missing, build it with build_libssa.sh and set "
+                "propagator_options.libssa_path.".format(lib_path)
+            )
+        lib = ctypes.CDLL(lib_path)
+
+        lib.ssa_init.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+        lib.ssa_init.restype  = ctypes.c_int
+
+        lib.ssa_run_multi.argtypes = [
+            ctypes.c_double, ctypes.c_double, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_double), ctypes.c_int,
+        ]
+        lib.ssa_run_multi.restype = ctypes.c_int
+
+        lib.ssa_get_n_species.argtypes = []
+        lib.ssa_get_n_species.restype  = ctypes.c_int
+
+        lib.ssa_get_last_error.argtypes = []
+        lib.ssa_get_last_error.restype  = ctypes.c_char_p
+
+        return lib
 
     def _write_restartDriver(self):
         lines = [
@@ -1347,6 +1772,78 @@ class weConvert:
             self._executable_westcfg()
         elif self.propagator_type == "libRoadRunner":
             self._libRR_westcfg()
+        elif self.propagator_type == "bng":
+            self._bng_westcfg()
+
+    def _bng_westcfg(self):
+        step_len = self.tau / self.plen
+        step_no = self.plen
+
+        if self.binning_style == "mabl":
+            drivers_block  = [
+                "  drivers:",
+                "    module_path: $WEST_SIM_ROOT",
+                "    we_driver: MABL_driver.MABLDriver",
+            ]
+            plugin_insert = []
+        elif self.binning_style == "adaptive":
+            drivers_block  = []
+            plugin_insert = [
+                "    - plugin: westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver",
+                "      av_enabled: true",
+                "      dfunc_method: system.dfunc",
+                "      walk_count: {}".format(self.traj_per_bin),
+                "      max_centers: {}".format(self.max_centers),
+                "      center_freq: {}".format(self.center_freq),
+            ]
+        else:
+            drivers_block  = []
+            plugin_insert = []
+
+        gen_istates = "true" if self.do_recycling else "false"
+
+        lines = (
+            ["# vi: set filetype=yaml :","---","west:"]
+            + drivers_block
+            + [
+            "  system:",
+            "    driver: system.System",
+            "    module_path: $WEST_SIM_ROOT",
+            "  propagation:",
+            "    max_total_iterations: {}".format(self.max_iter),
+            "    max_run_wallclock:    72:00:00",
+            "    propagator:           bng_propagator.bngPropagator",
+            "    gen_istates:          {}".format(gen_istates),
+            "    block_size:           {}".format(self.block_size),
+            "  data:\n",
+            "    west_data_file: west.h5",
+            "    datasets:",
+            "      - name:        pcoord",
+            "        scaleoffset: 4",
+            "      - name:        seed",
+            "        scaleoffset: 4",
+            "      - name:        final_state",
+            "        scaleoffset: 4",
+            "      - name:        pool_microstate",
+            "        scaleoffset: 4",
+            "  plugins:"]
+            + plugin_insert
+            + ["    - plugin: restart_plugin.RestartDriver",
+            "  bng:",
+            "    init:",
+            "      net_file: ./bngl_conf/init.net",
+            "      init_time_step: 0",
+            "      final_time_step: {}".format(self.tau),
+            "      num_time_step: {}".format(step_no + 1),
+            "      gillespie_update_interval: {}".format(self.gillespie_update_interval),
+            "    data:",
+            "      pcoords: {}".format(('["' + '","'.join(self.pcoord_list) + '"]')),
+            ]
+        )
+
+        full_text = "\n".join(lines)
+        with open("west.cfg", "w") as f:
+            f.write(full_text)
 
     def _libRR_westcfg(self):
         step_len = self.tau / self.plen
@@ -1605,6 +2102,10 @@ class weConvert:
         elif self.propagator_type == "libRoadRunner":
             self._write_restartDriver()
             self._write_librrPropagator()
+        elif self.propagator_type == "bng":
+            self._write_restartDriver()
+            self._write_bngPropagator()
+            self._copy_bng_lib()
         if self.binning_style == "mabl":
             self._write_mabl_driver()
         if self.do_recycling:
@@ -1651,6 +2152,14 @@ class weConvert:
             self._executable_BNGL_on_file()
         elif self.propagator_type == "libRoadRunner":
             self._libRR_BNGL_on_file()
+        elif self.propagator_type == "bng":
+            # bng only ever needs the .net file — both the propagator
+            # itself and _sample_basis_states_bng() (used for recycling)
+            # read the .net file directly via libssa.so, with no SBML/XML
+            # export step. (libRoadRunner is only needed for recycling
+            # when propagator_type == "libRoadRunner"; see
+            # _sample_basis_states_libRR.)
+            self._executable_BNGL_on_file()
 
     def _libRR_BNGL_on_file(self):
         # We still need this stuff
@@ -1820,4 +2329,3 @@ os.chdir(curr_path)'''))
         self.write_dynamic_files()
         self.make_analysis_notebook()
         return
-    

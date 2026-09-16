@@ -101,7 +101,12 @@ class weTemplater:
                 "block_size": 10,
             }
         self.template_dict = {
-            "propagator_options": {"propagator_type": "libRoadRunner", "pcoords": None},
+            "propagator_options": {
+                "propagator_type": "bng",
+                "pcoords": None,
+                "libssa_path": None,
+                "gillespie_update_interval": 1,
+            },
             "binning_options": binning_dict,
             "path_options": {
                 "bngl_file": self.inp_file,
