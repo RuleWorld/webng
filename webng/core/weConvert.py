@@ -1565,9 +1565,15 @@ class weConvert:
             "    # DEBUG: every shell-level check upstream (run_network exit code,",
             "    # seg.gdat non-empty, seg.gdat has non-comment data rows) has",
             "    # passed, yet segments still end up with an empty pcoord -- this",
-            "    # traces exactly what this function sees and produces, gated on",
-            "    # the SEG_DEBUG/PROPAGATION_DEBUG env vars already set in west.cfg.",
-            "    if os.environ.get('SEG_DEBUG') or os.environ.get('PROPAGATION_DEBUG'):",
+            "    # traces exactly what this function sees and produces.",
+            "    # NOTE: unconditional for now -- pcoord_loader runs inside the",
+            "    # parent w_run process itself (it's a Python callable, not a",
+            "    # subprocess), so SEG_DEBUG/PROPAGATION_DEBUG (which west.cfg only",
+            "    # injects into spawned child processes like runseg.sh) are not",
+            "    # actually set in this process's os.environ -- gating on them",
+            "    # here silently produced zero output. Remove this print once the",
+            "    # root cause is found.",
+            "    if True:",
             "        sys.stderr.write(",
             "            'pcoord_loader: coord_filename={} single_point={} '"
             "            'raw_loadtxt_shape={} after_atleast_2d_shape={} '"
