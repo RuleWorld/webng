@@ -168,6 +168,14 @@ class weTemplater:
                     "step-iter": 1,
                     "output": "flux.png",
                 },
+                "pcca": {
+                    "enabled": False,
+                    "n-clusters": None,
+                    "burn-in": None,
+                    "step": 5,
+                    "mfpt-pairs": None,
+                    "movement-h5": None,
+                },
             },
         }
         # adjust dictionary
