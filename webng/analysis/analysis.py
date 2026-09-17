@@ -1,23 +1,27 @@
-import sys, yaml
-from yaml import Loader
-from webng.analysis import weAverage, weEvolution, weCluster, weNetwork, weFlux, wePCCA
+import sys, os
 
 
 class weAnalysis:
     """
-    This is the core analysis class that will be used by the command line
-    tool when called with the subcommand `webng analysis`.
-
-    The class needs the analysis dictionary from the configuration file
-    for initialization and when you use the `run` method it will go through
-    the dictionary, calling the appropriate analysis tools with the subdictionaries
-    of each, in the appropriate order.
+    Base class for all analysis classes.
     """
 
-    def __init__(self, args) -> None:
-        with open(args.opts, "r") as f:
-            opt_dict = yaml.load(f,Loader=Loader)
-        self.opts = opt_dict
+    def __init__(self, opts):
+        # get this in so we can import system.py if need be
+        sys.path.append(opts["sim_name"])
+        # keep opts around
+        self.opts = opts
+        # Set work path
+        if self.opts["work-path"] is None:
+            self.work_path = os.path.join(self.opts["sim_name"], "analysis")
+        # we want to go there
+        if not os.path.isdir(self.work_path):
+            os.mkdir(self.work_path)
+        # assert os.path.isdir(self.work_path), "Work path: {} doesn't exist".format(self.work_path)
+        self.curr_path = os.getcwd()
+        os.chdir(self.work_path)
+        # Set names if we have them
+        self.set_names(opts["pcoords"])
 
     def _getd(self, dic, key, default=None, required=True):
         val = dic.get(key, default)
@@ -25,97 +29,11 @@ class weAnalysis:
             sys.exit("{} is not specified in the dictionary".format(key))
         return val
 
-    def run(self) -> None:
-        if "analyses" in self.opts:
-            print("running analyses")
-            # we got some analyses to run
-            analysis_dict = self.opts["analyses"]
-            if "work-path" in analysis_dict:
-                work_path = analysis_dict["work-path"]
-            else:
-                work_path = None
-            analysis_bins = analysis_dict["analysis_bins"]
-            first_iter = analysis_dict["first-iter"]
-            last_iter = analysis_dict["last-iter"]
-            tau = self.opts["sampling_options"]["tau"]
-            if self._getd(analysis_dict, "enabled", default=True):
-                # we should run the analyses we have
-                analysis_list = list(analysis_dict.keys())
-                if "average" in analysis_list:
-                    avg_dict = analysis_dict["average"]
-                    if self._getd(avg_dict, "enabled", default=True):
-                        print("running analysis: average")
-                        # enabled, run
-                        avg_dict["pcoords"] = self.opts["propagator_options"]["pcoords"]
-                        avg_dict["sim_name"] = self.opts["path_options"]["sim_name"]
-                        avg_dict["work-path"] = work_path
-                        avg_dict["bins"] = analysis_bins
-                        avg_dict["first-iter"] = first_iter
-                        avg_dict["last-iter"] = last_iter
-                        weAverage(avg_dict).run()
-                if "evolution" in analysis_list:
-                    evo_dict = analysis_dict["evolution"]
-                    if self._getd(evo_dict, "enabled", default=True):
-                        print("running analysis: evolution")
-                        # enabled, run
-                        evo_dict["pcoords"] = self.opts["propagator_options"]["pcoords"]
-                        evo_dict["sim_name"] = self.opts["path_options"]["sim_name"]
-                        evo_dict["work-path"] = work_path
-                        evo_dict["bins"] = analysis_bins
-                        evo_dict["first-iter"] = first_iter
-                        evo_dict["last-iter"] = last_iter
-                        weEvolution(evo_dict).run()
-                if "cluster" in analysis_list:
-                    clust_dict = analysis_dict["cluster"]
-                    if self._getd(clust_dict, "enabled", default=True):
-                        print("running analysis: cluster")
-                        # enabled, run
-                        clust_dict["pcoords"] = self.opts["propagator_options"][
-                            "pcoords"
-                        ]
-                        clust_dict["sim_name"] = self.opts["path_options"]["sim_name"]
-                        clust_dict["work-path"] = work_path
-                        clust_dict["bins"] = analysis_bins
-                        clust_dict["first-iter"] = first_iter
-                        clust_dict["last-iter"] = last_iter
-                        weCluster(clust_dict).run()
-                if "network" in analysis_list:
-                    net_dict = analysis_dict["network"]
-                    if self._getd(net_dict, "enabled", default=True):
-                        print("running analysis: network")
-                        # enabled, run
-                        # if "cluster" in analysis_dict:
-                        #     net_dict["assignments"] = analysis_dict["cluster"][
-                        #         "assignments"
-                        #     ]
-                        #     net_dict["metastable-states-file"] = analysis_dict[
-                        #         "cluster"
-                        #     ]["metastable-states-file"]
-                        net_dict["pcoords"] = self.opts["propagator_options"]["pcoords"]
-                        net_dict["sim_name"] = self.opts["path_options"]["sim_name"]
-                        net_dict["work-path"] = work_path
-                        net_dict["first-iter"] = first_iter
-                        net_dict["last-iter"] = last_iter
-                        net_dict["tau"] = tau
-                        weNetwork(net_dict).run()
-                if "flux" in analysis_list:
-                    flux_dict = analysis_dict["flux"]
-                    if self._getd(flux_dict, "enabled", default=True):
-                        print("running analysis: flux")
-                        flux_dict["pcoords"]    = self.opts["propagator_options"]["pcoords"]
-                        flux_dict["sim_name"]   = self.opts["path_options"]["sim_name"]
-                        flux_dict["work-path"]  = work_path
-                        flux_dict["first-iter"] = first_iter
-                        flux_dict["last-iter"]  = last_iter
-                        weFlux(flux_dict).run()
-                if "pcca" in analysis_list:
-                    pcca_dict = analysis_dict["pcca"]
-                    if self._getd(pcca_dict, "enabled", default=True):
-                        print("running analysis: pcca")
-                        pcca_dict["pcoords"]    = self.opts["propagator_options"]["pcoords"]
-                        pcca_dict["sim_name"]   = self.opts["path_options"]["sim_name"]
-                        pcca_dict["work-path"]  = work_path
-                        pcca_dict["first-iter"] = first_iter
-                        pcca_dict["last-iter"]  = last_iter
-                        pcca_dict["tau"]        = tau
-                        wePCCA(pcca_dict).run()
+    def set_names(self, names):
+        if names is not None:
+            self.names = dict(zip(range(len(names)), names))
+        else:
+            # We know the dimensionality, can assume a
+            # naming scheme if we don't have one
+            print("Giving default names to each dimension")
+            self.names = dict((i, str(i)) for i in range(self.dims))

@@ -1,6 +1,6 @@
 import sys, yaml
 from yaml import Loader
-from webng.analysis import weAverage, weEvolution, weCluster, weNetwork, weFlux
+from webng.analysis import weAverage, weEvolution, weCluster, weNetwork, weFlux, wePCCA
 
 
 class weAnalysis:
@@ -108,3 +108,14 @@ class weAnalysis:
                         flux_dict["first-iter"] = first_iter
                         flux_dict["last-iter"]  = last_iter
                         weFlux(flux_dict).run()
+                if "pcca" in analysis_list:
+                    pcca_dict = analysis_dict["pcca"]
+                    if self._getd(pcca_dict, "enabled", default=True):
+                        print("running analysis: pcca")
+                        pcca_dict["pcoords"]    = self.opts["propagator_options"]["pcoords"]
+                        pcca_dict["sim_name"]   = self.opts["path_options"]["sim_name"]
+                        pcca_dict["work-path"]  = work_path
+                        pcca_dict["first-iter"] = first_iter
+                        pcca_dict["last-iter"]  = last_iter
+                        pcca_dict["tau"]        = tau
+                        wePCCA(pcca_dict).run()
