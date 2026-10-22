@@ -103,6 +103,7 @@ class weAverage(weAnalysis):
             self.mapper = utils.load_mapper(self.h5file, mapper_iter)
         except:
             self.mapper = utils.load_mapper(self.h5file, mapper_iter - 1)
+        return self.mapper
 
     def set_dims(self, dims=None):
         if dims is None:
@@ -152,19 +153,7 @@ class weAverage(weAnalysis):
         return
 
     def run(self, ext=None):
-        if not os.path.isfile("pdist.h5"):
-            print("pdist.h5 does not exist. Running w_pdist")
-            command = [
-                "w_pdist",
-                "-W", "{}".format(self.h5file_path),
-                "--first-iter", "{}".format(self.first_iter),
-                "--last-iter", "{}".format(self.last_iter),
-                "-o", "pdist.h5",
-                "-b", "{}".format(self.bins),
-            ]
-            proc = sbpc.Popen(command)
-            proc.wait()
-        datFile = h5py.File("pdist.h5", "r")
+        datFile = self.ensure_pdist()
 
         # Plot options
         name_fsize   = 6

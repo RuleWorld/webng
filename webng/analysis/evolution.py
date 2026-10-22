@@ -101,27 +101,9 @@ class weEvolution(weAnalysis):
         return
 
     def run(self, ext=None):
-        if not os.path.isfile("pdist.h5"):
-            print("pdist.h5 does not exist. Running w_pdist")
-            command = [
-                        "w_pdist",
-                        "-W",
-                        "{}".format(self.h5file_path),
-                        "--first-iter",
-                        "{}".format(self.first_iter),
-                        "--last-iter",
-                        "{}".format(self.last_iter),
-                        "-o",
-                        "pdist.h5",
-                        "-b",
-                        "{}".format(self.bins)
-                    ]
-            # if self.system == 'Windows':
-            #     command += ["--work-manager","threads"]
-            proc = sbpc.Popen(command)
-            proc.wait()
-        datFile = h5py.File("pdist.h5", "r")
+        datFile = self.ensure_pdist()
 
+        name_fsize = 6
         if "plot-opts" in self.opts:
             plot_opts = self.opts["plot-opts"]
             name_fsize = self._getd(plot_opts, "name-font-size", default=6)

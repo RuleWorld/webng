@@ -565,34 +565,17 @@ class wePCCA(weAnalysis):
         assign_h5 = "assign.h5"
         tmat_h5 = "tmat.h5"
 
-        if not os.path.isfile(assign_h5):
-            print("assign.h5 does not exist. Running w_assign")
-            command = [
-                "w_assign",
-                "-W",
-                "{}".format(self.h5file_path),
-                "--states-from-file",
-                "./analysis/states.yaml",
-                "-o",
-                "./analysis/{}".format(assign_h5),
-            ]
-            proc = sbpc.Popen(command, cwd="../")
-            proc.wait()
+        assign_stamp = self.ensure_assign()
 
-        if not os.path.isfile(tmat_h5):
-            print("tmat.h5 does not exist. Running w_reweight")
-            command = [
-                "w_reweight",
-                "init",
-                "-W",
-                "{}".format(self.h5file_path),
-                "-a",
-                "./analysis/{}".format(assign_h5),
-                "-o",
-                "./analysis/{}".format(tmat_h5),
-            ]
-            proc = sbpc.Popen(command, cwd="../")
-            proc.wait()
+        command = [
+            "w_reweight",
+            "init",
+            "-W", "{}".format(self.h5file_path),
+            "-a", "./analysis/{}".format(assign_h5),
+            "-o", "./analysis/{}".format(tmat_h5),
+        ]
+        self.run_westpa_tool(tmat_h5, command,
+                             self.stamp("w_reweight init", assign=assign_stamp), cwd="../")
 
         print("Building transition matrix...")
         tm_norm, all_iter_tms, nbins = self.build_transition_matrix(

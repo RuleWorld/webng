@@ -60,27 +60,10 @@ class weCluster(weAnalysis):
         return first_iter, last_iter
 
     def run(self):
-        if not os.path.isfile("pdist.h5"):
-            print("pdist.h5 does not exist. Running w_pdist")
-            command = [
-                        "w_pdist",
-                        "-W",
-                        "{}".format(self.h5file_path),
-                        "--first-iter",
-                        "{}".format(self.first_iter),
-                        "--last-iter",
-                        "{}".format(self.last_iter),
-                        "-o",
-                        "pdist.h5",
-                        "-b",
-                        "{}".format(self.bins)
-                    ]
-            # if self.system == 'Windows':
-            #     command += ["--work-manager","threads"]
-            proc = sbpc.Popen(command)
-            proc.wait()
-        datFile = h5py.File("pdist.h5", "r")
-        Hists = datFile["histograms"][self.first_iter:self.last_iter].mean(axis=0)
+        datFile = self.ensure_pdist()
+        # pdist.h5 already covers exactly first_iter..last_iter, so use every row
+        # (indexing it by iteration number again would double-offset the range)
+        Hists = datFile["histograms"][:].mean(axis=0)
 
         # Figure out which bins are contained in high density regions
         density_threshold = np.percentile(Hists, self.threshold)

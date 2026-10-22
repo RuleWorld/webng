@@ -41,19 +41,18 @@ class weFlux(weAnalysis):
 
     def run(self):
         # --- Run w_fluxanl if output file does not exist ---
-        if not os.path.isfile("fluxanl.h5"):
-            print("fluxanl.h5 does not exist. Running w_fluxanl")
-            command = [
-                "w_fluxanl",
-                "-W",           "{}".format(self.h5file_path),
-                "--first-iter", "{}".format(self.first_iter),
-                "--last-iter",  "{}".format(self.last_iter),
-                "--evol",
-                "--evol-step",  "{}".format(self.step_iter),
-                "-o",           "fluxanl.h5",
-            ]
-            proc = sbpc.Popen(command)
-            proc.wait()
+        command = [
+            "w_fluxanl",
+            "-W",           "{}".format(self.h5file_path),
+            "--first-iter", "{}".format(self.first_iter),
+            "--last-iter",  "{}".format(self.last_iter),
+            "--evol",
+            "--evol-step",  "{}".format(self.step_iter),
+            "-o",           "fluxanl.h5",
+        ]
+        stamp = self.stamp("w_fluxanl", first_iter=int(self.first_iter),
+                           last_iter=int(self.last_iter), step_iter=self.step_iter)
+        self.run_westpa_tool("fluxanl.h5", command, stamp)
 
         # --- Read results ---
         with h5py.File("fluxanl.h5", "r") as f:

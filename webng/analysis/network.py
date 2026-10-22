@@ -50,46 +50,25 @@ class weNetwork(weAnalysis):
         return first_iter, last_iter
 
     def run(self):
-        if not os.path.isfile("assign.h5"):
-            print("assign.h5 does not exist. Running w_assign")
-            command = [
-                        "w_assign",
-                        "-W",
-                        "{}".format(self.h5file_path),
-                        "--states-from-file",
-                        "./analysis/states.yaml",
-                        "-o",
-                        "./analysis/assign.h5",
-                    ]
-            proc = sbpc.Popen(command,cwd="../")
-            proc.wait()
+        assign_stamp = self.ensure_assign()
 
-        if not os.path.isfile("direct.h5"):
-            print("direct.h5 does not exist. Running w_direct")
-            with open("direct_output.txt", "w") as f:
-                command = [
-                        "w_direct",
-                        "all",
-                        "-W",
-                        "{}".format(self.h5file_path),
-                        "-a",
-                        "./analysis/assign.h5",
-                        "--first-iter",
-                        "{}".format(self.first_iter),
-                        "--last-iter",
-                        "{}".format(self.last_iter),
-                        "--step-iter",
-                        "{}".format(self.step_iter),
-                        "-e",
-                        "cumulative"
-                    ]
-                proc = sbpc.Popen(command,stdout=sbpc.PIPE, stderr=sbpc.STDOUT, text=True, cwd="../")
-                proc.wait()
-                for line in proc.stdout:
-                    print(line, end="")
-                    if not line.strip().endswith("..."):
-                        f.write(line)
-            shutil.move(os.path.join("..", "direct.h5"), "direct.h5")
+        command = [
+            "w_direct",
+            "all",
+            "-W", "{}".format(self.h5file_path),
+            "-a", "./analysis/assign.h5",
+            "--first-iter", "{}".format(self.first_iter),
+            "--last-iter", "{}".format(self.last_iter),
+            "--step-iter", "{}".format(self.step_iter),
+            "-e", "cumulative",
+        ]
+        stamp = self.stamp("w_direct", assign=assign_stamp,
+                           first_iter=int(self.first_iter),
+                           last_iter=int(self.last_iter), step_iter=self.step_iter)
+        # w_direct writes direct.h5 into the sim folder; it's moved here after
+        self.run_westpa_tool("direct.h5", command, stamp, cwd="../",
+                             produced_at=os.path.join("..", "direct.h5"),
+                             log_path="direct_output.txt")
 
         dirFile = h5py.File("direct.h5", "r")
         rate_evolution = dirFile["rate_evolution"][:]
