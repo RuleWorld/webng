@@ -108,6 +108,9 @@ venv.bak/
 # temporary
 stest/*
 
+# Mac Finder
+.DS_Store
+
 # test folders
 tests/test/
 tests/test_executable/

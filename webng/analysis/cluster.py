@@ -73,7 +73,7 @@ class weCluster(weAnalysis):
                         else:
                             s = 80
                             for l in label:
-                                ax.scatter(x,y,marker=f'${l}$',s=s,c=colors[l],alpha=0.5)
+                                ax.scatter(x,y,marker=f'${l}$',s=s,c=colors[l % len(colors)],alpha=0.5)
                 ax.set_xlabel(self.names[jj])
                 ax.set_ylabel(self.names[ii])
                 f.savefig('cluster_{}_{}.png'.format(self.names[jj],self.names[ii]))

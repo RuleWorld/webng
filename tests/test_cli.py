@@ -278,7 +278,3 @@ class TestDefaultSetupAndRun:
         os.chdir(fpath)
         _run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
         _run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
-
-
-# TODO: Write tests for each analysis module (average/evolution/cluster/
-# network/flux) — still no coverage here. Tracked separately.
