@@ -11,6 +11,8 @@ names after a rename, syntactically invalid generated Python, etc.
 """
 import ast
 
+import pytest
+
 
 # ---------------------------------------------------------------------------
 # bng
@@ -36,6 +38,126 @@ class TestWriteBngPropagator:
         # still say "libssa" — everything else should be "bng"-branded
         stripped = src.replace("libssa.so", "").replace("build_libssa.sh", "")
         assert "libssa" not in stripped
+
+
+class TestBngPropagatorStartStates:
+    """
+    Loads the *generated* bng_propagator.py and drives propagate() with a
+    fake simulator that behaves like the real library (one global state;
+    each run adds +10 to species A per sub-interval), so these run on any
+    platform without the real shared library.
+
+    Regression coverage for bugs found in the generator:
+      - iteration-1 walkers only reseeded and never set a start state, so
+        each started where the previous one in the same worker ended
+      - basis states were ignored (every bstate got init.net's pcoord)
+      - with num_time_step == 2, pcoord[0] was always init.net's pcoord
+    """
+    NET = ("begin species\n1 A() {a}\n2 B() {b}\n3 C() {c}\nend species\n"
+           "begin groups\n1 Atot 1\n2 Weighted 2*2,3*3\nend groups\n")
+
+    class FakeLib:
+        def __init__(self, n):
+            import numpy as np
+            self.np, self.n, self.state = np, n, np.zeros(n)
+        def _arr(self, ptr, n):
+            return self.np.ctypeslib.as_array(ptr, shape=(n,))
+        def ssa_set_state(self, ptr, n):
+            self.state = self._arr(ptr, n).copy(); return 0
+        def ssa_reseed(self, seed):
+            pass
+        def ssa_run(self, t0, t1):
+            self.state[0] += 10; return 0
+        def ssa_get_state(self, ptr, n):
+            self._arr(ptr, n)[:] = self.state; return 0
+        def ssa_run_multi(self, t0, t1, nts, ptr, n):
+            out = self.np.ctypeslib.as_array(ptr, shape=(nts * n,)).reshape(nts, n)
+            out[0] = self.state
+            for i in range(1, nts):
+                self.state[0] += 10; out[i] = self.state
+            return 0
+        def ssa_get_last_error(self):
+            return b""
+
+    class Seg:
+        SEG_STATUS_COMPLETE = 2
+        def __init__(self, seg_id, n_iter, parent_id, data=None):
+            self.seg_id, self.n_iter, self.parent_id = seg_id, n_iter, parent_id
+            self.data = data or {}
+
+    class State:
+        def __init__(self, auxref=None, basis_state_id=None):
+            self.auxref, self.basis_state_id = auxref, basis_state_id
+
+    def _prop(self, bare_weconvert, tmp_path, monkeypatch, num_ts):
+        import importlib.util
+        import numpy as np
+        monkeypatch.chdir(tmp_path)
+        bare_weconvert()._write_bngPropagator()
+        for name, (a, b, c) in {"init.net": (1, 2, 3), "SC.net": (800, 0, 0),
+                                "IM.net": (100, 5, 5)}.items():
+            (tmp_path / name).write_text(self.NET.format(a=a, b=b, c=c))
+        spec = importlib.util.spec_from_file_location("gen_bng", tmp_path / "bng_propagator.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        P = mod.bngPropagator.__new__(mod.bngPropagator)   # skip __init__ (needs the real library)
+        P.net_file = str(tmp_path / "init.net")
+        P.t_start, P.t_end, P.num_ts = 0.0, 10.0, num_ts
+        P.pcoord_keys, P._n_species = ["Atot", "Weighted"], 3
+        P._lib = self.FakeLib(3)
+        groups = mod._parse_net_groups(P.net_file)
+        P._pcoord_terms = [groups[k] for k in P.pcoord_keys]
+        P._init_counts = mod._parse_net_species_counts(P.net_file, 3)
+        P._initial_pcoord = P._weighted_pcoord(P._init_counts)
+        P._multi_buf, P._state_buf = np.zeros(num_ts * 3), np.zeros(3)
+        P.basis_states = {0: self.State(auxref="SC.net"), 1: self.State(auxref="IM.net")}
+        P.initial_states = {0: self.State(basis_state_id=0), 1: self.State(basis_state_id=0),
+                            2: self.State(basis_state_id=1)}
+        return P
+
+    @pytest.mark.parametrize("num_ts", [2, 11])
+    def test_iteration1_starts_from_basis_states_not_chained(self, bare_weconvert, tmp_path, monkeypatch, num_ts):
+        P = self._prop(bare_weconvert, tmp_path, monkeypatch, num_ts)
+        segs = [self.Seg(0, 1, -1), self.Seg(1, 1, -2), self.Seg(2, 1, -3)]  # SC, SC, IM, same worker
+        P.propagate(segs)
+        assert [s.pcoord[0][0] for s in segs] == [800, 800, 100]
+        assert segs[2].pcoord[0][1] == 2 * 5 + 3 * 5       # weighted observable
+
+    @pytest.mark.parametrize("num_ts", [2, 11])
+    def test_continuing_walker_records_its_own_start(self, bare_weconvert, tmp_path, monkeypatch, num_ts):
+        import numpy as np
+        P = self._prop(bare_weconvert, tmp_path, monkeypatch, num_ts)
+        seg = self.Seg(3, 2, 0, {"restart_state": np.array([42.0, 1.0, 1.0])})
+        P.propagate([seg])
+        assert seg.pcoord[0][0] == 42                      # not init.net's value
+        assert seg.data["final_state"][0] == 42 + 10 * (num_ts - 1)
+
+    def test_recycled_walkers_use_pool_then_basis_state(self, bare_weconvert, tmp_path, monkeypatch):
+        import numpy as np
+        P = self._prop(bare_weconvert, tmp_path, monkeypatch, 11)
+        pooled = self.Seg(4, 3, -3, {"restart_state": [-1, -1, -1], "pool_microstate": np.array([7.0, 0, 0])})
+        unpooled = self.Seg(5, 3, -3, {"restart_state": [-1, -1, -1], "pool_microstate": None})
+        P.propagate([pooled, unpooled])
+        assert pooled.pcoord[0][0] == 7
+        assert unpooled.pcoord[0][0] == 100                # IM basis state, not chained from `pooled`
+
+    def test_continuing_walker_without_restart_state_raises(self, bare_weconvert, tmp_path, monkeypatch):
+        P = self._prop(bare_weconvert, tmp_path, monkeypatch, 11)
+        with pytest.raises(RuntimeError, match="restart_state"):
+            P.propagate([self.Seg(6, 2, 0, {})])
+
+    def test_basis_state_pcoord_comes_from_its_net_file(self, bare_weconvert, tmp_path, monkeypatch):
+        P = self._prop(bare_weconvert, tmp_path, monkeypatch, 11)
+        bstate = self.State(auxref="SC.net")
+        P.get_pcoord(bstate)
+        assert list(bstate.pcoord) == [800, 0]
+
+    def test_no_file_based_istate_hack(self, bare_weconvert, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        bare_weconvert()._write_bngPropagator()
+        src = (tmp_path / "bng_propagator.py").read_text()
+        for leftover in ["istate_net_map", "threading", "bstate_lookup_debug"]:
+            assert leftover not in src
 
 
 class TestBngWestcfg:
