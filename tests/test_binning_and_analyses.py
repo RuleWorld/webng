@@ -17,6 +17,7 @@ errors -- not that the numbers are scientifically meaningful, which a
 """
 import os
 import shutil
+import traceback
 
 import h5py
 import numpy as np
@@ -64,32 +65,48 @@ def _configure(opts, style):
 
 @pytest.fixture(scope="module")
 def build_sim():
-    """build_sim(style) -> (absolute yaml path, absolute sim folder), built once per style."""
-    built = {}
+    """
+    build_sim(style) -> (absolute yaml path, absolute sim folder), built once
+    per style. A style that fails to build is not retried: later tests for it
+    fail straight away with the original error.
+    """
+    built, failed = {}, {}
 
     def build(style):
         if style in built:
             return built[style]
+        if style in failed:
+            pytest.fail("the {} simulation failed to build earlier:\n{}".format(style, failed[style]))
         _remove(style)
         yaml_name, sim_name = _names(style)
+        yaml_path, sim_path = os.path.join(tfold, yaml_name), os.path.join(tfold, sim_name)
         try:
             argv = ["template", "-i", "test.bngl", "-o", yaml_name, "--bins", style]
             with weBNGTest(argv=argv) as app:
                 app.run()
-            with open(yaml_name) as f:
+            with open(yaml_path) as f:
                 opts = yaml.safe_load(f)
             _configure(opts, style)
-            with open(yaml_name, "w") as f:
+            with open(yaml_path, "w") as f:
                 yaml.dump(opts, f)
 
-            with weBNGTest(argv=["setup", "--opts", yaml_name]) as app:
-                app.run()
-            os.chdir(sim_name)
+            # `webng setup` runs in its own process, as it does for users. With
+            # recycling it samples basis states through libssa, which can only
+            # be initialized once per process (its C globals are never freed;
+            # see test_recycling.py), so running it in this pytest process
+            # would crash the next build that samples. It also chdirs into the
+            # sim folder and doesn't come back, which is why paths here are absolute.
+            _run_and_check(["webng", "setup", "--opts", yaml_path], "webng setup")
+            os.chdir(sim_path)
             _run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
             _run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
+        except BaseException:
+            failed[style] = traceback.format_exc()
+            print(failed[style])     # show it now, in case something later stops pytest early
+            raise
         finally:
             os.chdir(tfold)
-        built[style] = (os.path.join(tfold, yaml_name), os.path.join(tfold, sim_name))
+        built[style] = (yaml_path, sim_path)
         return built[style]
 
     yield build
