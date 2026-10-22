@@ -17,8 +17,7 @@ class weAnalysis:
         # Absolute path to the simulation folder. Everything (west.h5, system.py,
         # west.cfg) is found from here, so the analysis folder can live anywhere.
         self.sim_path = os.path.abspath(opts["sim_name"])
-        # get this in so we can import system.py if need be (e.g. unpickling bin mappers)
-        sys.path.append(self.sim_path)
+        self._use_this_sims_system_py()
         # keep opts around
         self.opts = opts
         # the simulation's data, opened read-only for the analysis's lifetime
@@ -42,6 +41,26 @@ class weAnalysis:
             self._getd(opts, "first-iter", default=None, required=False),
             self._getd(opts, "last-iter", default=None, required=False),
         )
+
+    def _use_this_sims_system_py(self):
+        """
+        Make `import system` (used to unpickle bin mappers, and by average's
+        boundary plotting) resolve to THIS simulation's system.py. Each sim has
+        its own, so when one Python process analyzes several sims (a notebook,
+        or the test suite), the folder must go first on sys.path, and a
+        `system` module already imported from a different sim must be dropped;
+        otherwise the first sim's system.py silently wins for every later one.
+        """
+        if self.sim_path in sys.path:
+            sys.path.remove(self.sim_path)
+        sys.path.insert(0, self.sim_path)
+        cached = sys.modules.get("system")
+        cached_file = getattr(cached, "__file__", None)
+        if cached is not None and (
+            cached_file is None
+            or os.path.dirname(os.path.abspath(cached_file)) != self.sim_path
+        ):
+            del sys.modules["system"]
 
     def _getd(self, dic, key, default=None, required=True):
         val = dic.get(key, default)

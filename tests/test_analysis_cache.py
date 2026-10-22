@@ -177,3 +177,25 @@ def test_work_path_outside_sim_folder(sim, tmp_path, monkeypatch):
     finally:
         an.h5file.close()
         os.chdir(an.curr_path)
+
+
+def test_each_sim_gets_its_own_system_py(tmp_path, monkeypatch):
+    """
+    Analyzing two sims in one process (a notebook, or the test suite) must
+    import each sim's own system.py, e.g. when unpickling its bin mapper.
+    Previously the first sim's system.py silently won for every later one.
+    """
+    monkeypatch.chdir(tmp_path)
+    for name in ["sim_a", "sim_b"]:
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "system.py").write_text("WHICH = {!r}\n".format(name))
+        set_west(tmp_path / name, 11)
+    for name in ["sim_a", "sim_b", "sim_a"]:
+        an = weAnalysis({"sim_name": name, "work-path": None, "pcoords": ["A"]})
+        try:
+            import system
+            assert system.WHICH == name
+        finally:
+            an.h5file.close()
+            os.chdir(an.curr_path)
+    sys.modules.pop("system", None)
