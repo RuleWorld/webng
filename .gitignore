@@ -1,4 +1,7 @@
-.vscode# Byte-compiled / optimized / DLL files
+# Editor settings
+.vscode/
+
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
@@ -6,6 +9,9 @@ __pycache__/
 # C extensions
 *.so
 !webng/assets/libssa.so
+
+# libssa build products (build_libssa.sh creates this folder; the script itself is tracked)
+libssa/build_libssa/
 
 # Distribution / packaging
 .Python
@@ -118,4 +124,6 @@ tests/test_libRoadRunner/
 tests/test_bng/
 tests/test_setup.yaml
 tests/test_setup_*.yaml
+tests/test_*_binning/
+tests/test_*_binning.yaml
 .pytest_cache/

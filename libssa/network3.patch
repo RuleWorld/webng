@@ -1,0 +1,30 @@
+--- a/network.h
++++ b/network.h
+@@ -270,6 +270,7 @@
+ extern double gillespie_n_steps();
+ extern double gillespie_frac_species_active();
+ extern double gillespie_frac_rxns_active();
++extern int    resync_gillespie_state();
+ extern void	  delete_GSP_included();
+ 
+ // Custom muParser functions
+--- a/network.cpp
++++ b/network.cpp
+@@ -5261,6 +5261,17 @@
+ 	return (0);
+ }
+ 
++int resync_gillespie_state() {
++    double a_tot_before = GSP.a_tot;
++    get_conc_network(GSP.c);
++    GSP.a_tot = 0.0;
++    for (int i = 0; i < GSP.na; i++) {
++        GSP.a[i] = rxn_rate(network.reactions->rxn[i], GSP.c_offset, 1);
++        GSP.a_tot += GSP.a[i];
++    }
++    return 0;
++}
++
+ int init_adaptive_scaling_network(int update_interval, int seed, double poplevel, bool pScaleChecker) {
+ 	int i;
+ 	Rxn** rarray;
