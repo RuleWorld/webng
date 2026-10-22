@@ -33,22 +33,12 @@ class weAverage(weAnalysis):
 
     def __init__(self, opts):
         super().__init__(opts)
-        # Once the arguments are parsed, do a few prep steps, opening h5file
-        # self.system = platform.system()
-        self.h5file_path = os.path.join("..", "west.h5")
-        self.h5file = h5py.File(self.h5file_path, "r")
         # Set the dimensionality
         self.set_dims(self._getd(opts, "dimensions", required=False))
         # Plot the bins?
         self.plot_boundaries = self._getd(opts, "plot-boundaries", default=False, required=False)
         # Plotting energies or not?
         self.do_energy = self._getd(opts, "plot-energy", default=False, required=False)
-        # iterations
-        self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
-        self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
-        self.first_iter, self.last_iter = self.set_iter_range(
-            self.first_iter, self.last_iter
-        )
         # output name
         self.outname = self._getd(opts, "output", default="average.png", required=False)
         # data smoothing
@@ -104,30 +94,6 @@ class weAverage(weAnalysis):
         except:
             self.mapper = utils.load_mapper(self.h5file, mapper_iter - 1)
         return self.mapper
-
-    def set_dims(self, dims=None):
-        if dims is None:
-            dims = self.h5file["iterations/iter_{:08d}".format(1)]["pcoord"].shape[2]
-        self.dims = dims
-        # return the dimensionality if we need to
-        return self.dims
-
-    def set_names(self, names):
-        if names is not None:
-            self.names = dict(zip(range(len(names)), names))
-        else:
-            # We know the dimensionality, can assume a
-            # naming scheme if we don't have one
-            print("Giving default names to each dimension")
-            self.names = dict((i, str(i)) for i in range(self.dims))
-
-    def set_iter_range(self, first_iter, last_iter):
-        if first_iter is None:
-            first_iter = 1
-        if last_iter is None:
-            last_iter = self.h5file.attrs["west_current_iteration"] - 1
-
-        return first_iter, last_iter
 
     def setup_figure(self):
         # Setup the figure and names for each dimension

@@ -117,5 +117,5 @@ class weAnalysis:
                         pcca_dict["work-path"]  = work_path
                         pcca_dict["first-iter"] = first_iter
                         pcca_dict["last-iter"]  = last_iter
-                        pcca_dict["tau"]        = tau
+                        pcca_dict["sampling_options"] = self.opts["sampling_options"]
                         wePCCA(pcca_dict).run()

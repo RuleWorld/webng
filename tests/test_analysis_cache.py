@@ -20,6 +20,8 @@ import os, sys, h5py
 name = os.path.basename(sys.argv[0])
 with open(os.environ["WEBNG_TEST_CALLS"], "a") as f:
     f.write(name + "\\n")
+with open(os.environ["WEBNG_TEST_CALLS"] + ".cwd", "a") as f:
+    f.write(name + " " + os.getcwd() + "\\n")
 if os.environ.get("WEBNG_TEST_FAIL") == name:
     sys.exit(3)
 out = sys.argv[sys.argv.index("-o") + 1] if "-o" in sys.argv else "direct.h5"
@@ -48,6 +50,7 @@ def sim(tmp_path, monkeypatch):
     monkeypatch.chdir(sim_dir / "analysis")
 
     an = weAnalysis.__new__(weAnalysis)
+    an.sim_path, an.west_path = str(sim_dir), str(sim_dir / "west.h5")
     an.first_iter, an.last_iter, an.bins = 1, 100, 30
 
     def take_calls():
@@ -150,11 +153,27 @@ def test_assign_shared_and_dependents_follow_states_yaml(sim):
     assert take_calls() == ["w_direct"]                            # dependent rebuilt too
 
 
-def test_custom_work_path_and_absolute_sys_path(tmp_path, monkeypatch):
+def test_work_path_outside_sim_folder(sim, tmp_path, monkeypatch):
+    """The analysis folder doesn't have to sit inside the sim folder."""
+    sim_dir, _, take_calls = sim
     monkeypatch.chdir(tmp_path)
-    (tmp_path / "mysim").mkdir()
-    an = weAnalysis({"sim_name": "mysim", "work-path": "elsewhere", "pcoords": ["A"]})
-    assert an.work_path == "elsewhere"
-    assert os.getcwd() == str(tmp_path / "elsewhere")
-    assert str(tmp_path / "mysim") in sys.path
-    os.chdir(an.curr_path)
+    an = weAnalysis({"sim_name": "sim", "work-path": "elsewhere", "pcoords": ["A"],
+                     "first-iter": 5, "last-iter": None})
+    try:
+        assert an.work_path == "elsewhere"
+        assert os.getcwd() == str(tmp_path / "elsewhere")
+        assert str(sim_dir) in sys.path                         # absolute, for system.py
+        assert (an.first_iter, an.last_iter) == (5, 100)        # last finished iteration
+        an.bins = 30
+        an.ensure_pdist().close()
+        with open("states.yaml", "w") as f:
+            f.write("states:\n  - label: SC\n")
+        an.ensure_assign()
+        assert take_calls() == ["w_pdist", "w_assign"]
+        assert os.path.isfile("pdist.h5") and os.path.isfile("assign.h5")
+        cwds = dict(line.split(" ", 1) for line in
+                    open(os.environ["WEBNG_TEST_CALLS"] + ".cwd").read().splitlines())
+        assert cwds["w_assign"] == str(sim_dir)                 # needs west.cfg, so runs there
+    finally:
+        an.h5file.close()
+        os.chdir(an.curr_path)

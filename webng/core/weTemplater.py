@@ -171,8 +171,7 @@ class weTemplater:
                 "pcca": {
                     "enabled": False,
                     "n-clusters": None,
-                    "burn-in": None,
-                    "step": 5,
+                    "step-iter": 5,
                     "mfpt-pairs": None,
                     "movement-h5": None,
                 },

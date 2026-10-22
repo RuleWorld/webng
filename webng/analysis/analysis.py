@@ -14,12 +14,17 @@ class weAnalysis:
     """
 
     def __init__(self, opts):
-        # get this in so we can import system.py if need be. Absolute, because
-        # we chdir into the analysis folder below and a relative entry would
-        # then point at the wrong place (breaking e.g. unpickling bin mappers).
-        sys.path.append(os.path.abspath(opts["sim_name"]))
+        # Absolute path to the simulation folder. Everything (west.h5, system.py,
+        # west.cfg) is found from here, so the analysis folder can live anywhere.
+        self.sim_path = os.path.abspath(opts["sim_name"])
+        # get this in so we can import system.py if need be (e.g. unpickling bin mappers)
+        sys.path.append(self.sim_path)
         # keep opts around
         self.opts = opts
+        # the simulation's data, opened read-only for the analysis's lifetime
+        self.west_path = os.path.join(self.sim_path, "west.h5")
+        self.h5file_path = self.west_path
+        self.h5file = h5py.File(self.west_path, "r")
         # Set work path
         if self.opts["work-path"] is None:
             self.work_path = os.path.join(self.opts["sim_name"], "analysis")
@@ -32,12 +37,24 @@ class weAnalysis:
         os.chdir(self.work_path)
         # Set names if we have them
         self.set_names(opts["pcoords"])
+        # iteration range (defaults: all finished iterations)
+        self.first_iter, self.last_iter = self.set_iter_range(
+            self._getd(opts, "first-iter", default=None, required=False),
+            self._getd(opts, "last-iter", default=None, required=False),
+        )
 
     def _getd(self, dic, key, default=None, required=True):
         val = dic.get(key, default)
         if required and (val is None):
             sys.exit("{} is not specified in the dictionary".format(key))
         return val
+
+    def set_dims(self, dims=None):
+        """Number of pcoord dimensions (default: read from west.h5)."""
+        if dims is None:
+            dims = self.h5file["iterations/iter_{:08d}".format(1)]["pcoord"].shape[2]
+        self.dims = dims
+        return self.dims
 
     def set_names(self, names):
         if names is not None:
@@ -46,13 +63,22 @@ class weAnalysis:
             # We know the dimensionality, can assume a
             # naming scheme if we don't have one
             print("Giving default names to each dimension")
-            self.names = dict((i, str(i)) for i in range(self.dims))
+            dims = getattr(self, "dims", None) or self.set_dims()
+            self.names = dict((i, str(i)) for i in range(dims))
+
+    def set_iter_range(self, first_iter, last_iter):
+        """Defaults: from iteration 1 through the last finished iteration."""
+        if first_iter is None:
+            first_iter = 1
+        if last_iter is None:
+            last_iter = self.h5file.attrs["west_current_iteration"] - 1
+        return int(first_iter), int(last_iter)
 
     # ------------------------------------------------------------------
     # Cached outputs of WESTPA tools (pdist.h5, assign.h5, ...)
     #
-    # Every analysis runs from the analysis folder, with west.h5 one level up.
-    # A tool's output is reused only if it was stamped as built from the same
+    # Every analysis runs from its work path; west.h5 and the sim folder are
+    # found through self.sim_path, so the work path can be anywhere. A tool's output is reused only if it was stamped as built from the same
     # inputs; otherwise it's rebuilt. That's what keeps e.g. a pdist.h5 from an
     # older or shorter run from silently being used for a new one.
     # ------------------------------------------------------------------
@@ -64,9 +90,8 @@ class weAnalysis:
         time, so a continued, replaced, or different run all change it), and
         any settings that affect the result (iteration range, bins, ...).
         """
-        west = os.path.join("..", "west.h5")
-        st = os.stat(west)
-        with h5py.File(west, "r") as f:
+        st = os.stat(self.west_path)
+        with h5py.File(self.west_path, "r") as f:
             current = int(f.attrs["west_current_iteration"])
         built_from = {
             "tool": tool,
@@ -147,7 +172,7 @@ class weAnalysis:
         """
         command = [
             "w_pdist",
-            "-W", os.path.join("..", "west.h5"),
+            "-W", self.west_path,
             "--first-iter", "{}".format(self.first_iter),
             "--last-iter", "{}".format(self.last_iter),
             "-o", "pdist.h5",
@@ -163,12 +188,13 @@ class weAnalysis:
         assign.h5 from states.yaml, shared by network and pcca. Returns its
         stamp, which outputs built from it include in their own.
         """
+        # runs from the sim folder (w_assign needs its west.cfg / system.py)
         command = [
             "w_assign",
-            "-W", "west.h5",
-            "--states-from-file", "./analysis/states.yaml",
-            "-o", "./analysis/assign.h5",
+            "-W", self.west_path,
+            "--states-from-file", os.path.abspath("states.yaml"),
+            "-o", os.path.abspath("assign.h5"),
         ]
         stamp = self.stamp("w_assign", states_yaml=self.file_digest("states.yaml"))
-        self.run_westpa_tool("assign.h5", command, stamp, cwd="../")
+        self.run_westpa_tool("assign.h5", command, stamp, cwd=self.sim_path)
         return stamp

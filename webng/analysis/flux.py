@@ -22,22 +22,8 @@ class weFlux(weAnalysis):
 
     def __init__(self, opts):
         super().__init__(opts)
-        self.h5file_path = os.path.join("..", "west.h5")
-        self.h5file = h5py.File(self.h5file_path, "r")
-        self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
-        self.last_iter  = self._getd(opts, "last-iter",  default=None, required=False)
-        self.first_iter, self.last_iter = self.set_iter_range(
-            self.first_iter, self.last_iter
-        )
         self.step_iter = self._getd(opts, "step-iter", default=1,   required=False)
         self.output    = self._getd(opts, "output",    default="flux.png", required=False)
-
-    def set_iter_range(self, first_iter, last_iter):
-        if first_iter is None:
-            first_iter = 1
-        if last_iter is None:
-            last_iter = self.h5file.attrs["west_current_iteration"] - 1
-        return first_iter, last_iter
 
     def run(self):
         # --- Run w_fluxanl if output file does not exist ---

@@ -19,17 +19,9 @@ np.set_printoptions(precision=2)
 class weNetwork(weAnalysis):
     def __init__(self, opts):
         # get our parent initialization setup
-        super().__init__(opts)
-        # self.system = platform.system()
+        # read west.h5 without file locking (set before the base class opens it)
         os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
-        self.h5file_path = "west.h5"
-        self.h5file = h5py.File(os.path.join("..",self.h5file_path), "r")
-        # iterations
-        self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
-        self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
-        self.first_iter, self.last_iter = self.set_iter_range(
-            self.first_iter, self.last_iter
-        )
+        super().__init__(opts)
         self.tau = self._getd(opts, "tau", default=10, required=True)
         self.step_iter = self._getd(opts, "step-iter", default=10, required=False)
 
@@ -41,14 +33,6 @@ class weNetwork(weAnalysis):
                 states = yaml.load(file, Loader=Loader)
                 self.state_labels = [state["label"] for state in states["states"]]
 
-    def set_iter_range(self, first_iter, last_iter):
-        if first_iter is None:
-            first_iter = 1
-        if last_iter is None:
-            last_iter = self.h5file.attrs["west_current_iteration"] - 1
-
-        return first_iter, last_iter
-
     def run(self):
         assign_stamp = self.ensure_assign()
 
@@ -56,7 +40,7 @@ class weNetwork(weAnalysis):
             "w_direct",
             "all",
             "-W", "{}".format(self.h5file_path),
-            "-a", "./analysis/assign.h5",
+            "-a", os.path.abspath("assign.h5"),
             "--first-iter", "{}".format(self.first_iter),
             "--last-iter", "{}".format(self.last_iter),
             "--step-iter", "{}".format(self.step_iter),
@@ -65,9 +49,9 @@ class weNetwork(weAnalysis):
         stamp = self.stamp("w_direct", assign=assign_stamp,
                            first_iter=int(self.first_iter),
                            last_iter=int(self.last_iter), step_iter=self.step_iter)
-        # w_direct writes direct.h5 into the sim folder; it's moved here after
-        self.run_westpa_tool("direct.h5", command, stamp, cwd="../",
-                             produced_at=os.path.join("..", "direct.h5"),
+        # runs from the sim folder (needs west.cfg), writes direct.h5 there; moved here after
+        self.run_westpa_tool("direct.h5", command, stamp, cwd=self.sim_path,
+                             produced_at=os.path.join(self.sim_path, "direct.h5"),
                              log_path="direct_output.txt")
 
         dirFile = h5py.File("direct.h5", "r")

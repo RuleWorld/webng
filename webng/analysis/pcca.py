@@ -36,8 +36,9 @@ class wePCCA(weAnalysis):
         hardcoded rectangular decision tree tied to specific gene
         thresholds. How states.yaml gets made (DBSCAN via `cluster`, or
         by hand) is not this tool's concern.
-      - n-clusters/burn-in/step are now opts with defaults instead of
-        module-level constants
+      - n-clusters/step-iter are now opts with defaults instead of
+        module-level constants; burn-in is just first-iter from the
+        overarching analyses block (no separate concept needed)
       - PAPER_VALS (Tse et al. reference numbers used for validation)
         removed entirely -- comparison to a reference is the user's
         business, not a general tool's
@@ -60,38 +61,29 @@ class wePCCA(weAnalysis):
          exactly the system-specific heuristic this generalization is
          trying to avoid.
 
-    NOTE on verification: the pure array/math functions here (
-    stationary_prob, compute_mfpt_pair, the transition-matrix
-    normalization) were ported directly from pcca_master.py and
-    additionally checked against synthetic data. The HDF5-reading code
-    (build_transition_matrix, load_final_centers,
-    load_bin_state_assignment) and the pygpcca call could not be run
-    against a real WESTPA output or a real pygpcca install in the
-    environment this was written in -- these are the parts most likely
-    to need a small correction on first real run, and are commented
-    accordingly at each site.
+    Units: MFPT values are reported as real time, computed as
+    (expected number of WE iterations) * tau. This assumes `tau` is the
+    real-world duration of one WE iteration (e.g. seconds) -- the result
+    is in whatever unit tau itself is expressed in, NOT "tau^-1" (that
+    notation describes a rate, which is what network.py/flux.py report;
+    MFPT is a time, never a rate).
     """
 
     def __init__(self, opts):
-        super().__init__(opts)
+        # read west.h5 without file locking (set before the base class opens it)
         os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+        super().__init__(opts)
 
-        self.h5file_path = "west.h5"
-        self.h5file = h5py.File(os.path.join("..", self.h5file_path), "r")
-
-        # iterations
-        self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
-        self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
-        self.first_iter, self.last_iter = self.set_iter_range(
-            self.first_iter, self.last_iter
-        )
-
-        self.tau = self._getd(opts, "tau", default=10, required=True)
+        # tau always lives in sampling_options -- this must be injected
+        # by the caller (either the dispatcher's existing
+        # pcca_dict["sampling_options"] = self.opts["sampling_options"],
+        # or by hand if constructing opts directly, e.g. from a notebook).
+        sampling_opts = self._getd(opts, "sampling_options", default=None, required=True)
+        self.tau = self._getd(sampling_opts, "tau", default=10, required=True)
 
         # pcca-specific options, all optional with sensible defaults
         self.n_clusters = self._getd(opts, "n-clusters", default=None, required=False)
-        self.burn_in = self._getd(opts, "burn-in", default=None, required=False)
-        self.step = self._getd(opts, "step", default=5, required=False)
+        self.step = self._getd(opts, "step-iter", default=5, required=False)
         self.mfpt_pairs = self._getd(opts, "mfpt-pairs", default=None, required=False)
 
         # movement-h5: a separate west.h5 to load Voronoi bin centers from
@@ -100,10 +92,11 @@ class wePCCA(weAnalysis):
         # west.h5 being analyzed -- covers the common case where bins
         # were never re-adapted mid-run.
         movement_h5_opt = self._getd(opts, "movement-h5", default=None, required=False)
+        # (a path relative to the sim folder)
         self.movement_h5_path = (
-            os.path.join("..", movement_h5_opt)
+            os.path.join(self.sim_path, movement_h5_opt)
             if movement_h5_opt is not None
-            else os.path.join("..", self.h5file_path)
+            else self.west_path
         )
 
         # states.yaml: same convention `cluster` writes and `network`
@@ -130,13 +123,6 @@ class wePCCA(weAnalysis):
                 if src != tgt
             ]
 
-    def set_iter_range(self, first_iter, last_iter):
-        if first_iter is None:
-            first_iter = 1
-        if last_iter is None:
-            last_iter = self.h5file.attrs["west_current_iteration"] - 1
-        return first_iter, last_iter
-
     # ------------------------------------------------------------------
     # Ported directly from pcca_master.py -- pure array/HDF5 math, not
     # tied to the 8-gene system.
@@ -145,10 +131,7 @@ class wePCCA(weAnalysis):
     def load_final_centers(self, west_h5_path):
         """
         Reads the final iteration's Voronoi bin mapper out of a west.h5
-        and returns its bin centers. NOTE: could not test against a real
-        west.h5 in the environment this was written in -- ported as-is
-        from pcca_master.py, which Alex has already run successfully
-        against real WESTPA output.
+        and returns its bin centers.
         """
         with h5py.File(west_h5_path, "r") as f:
             iters = sorted(f["iterations"].keys())
@@ -228,8 +211,7 @@ class wePCCA(weAnalysis):
         return tm_norm, all_iter_tms, nbins
 
     def stationary_prob(self, T_active, n_active):
-        """Eigendecomposition-based stationary distribution. Verified
-        against synthetic transition matrices (see chat)."""
+        """Eigendecomposition-based stationary distribution."""
         try:
             ev, evec = np.linalg.eig(T_active.T)
             si = np.argmin(np.abs(ev - 1.0))
@@ -241,9 +223,11 @@ class wePCCA(weAnalysis):
     def compute_mfpt_pair(
         self, T_mat, n_act, f2a, assignments, src_label, tgt_label, stat_probs
     ):
-        """First-passage-time calculation for a single (src, tgt) pair.
-        Verified against an analytically-solvable synthetic 2-state
-        system (see chat)."""
+        """
+        First-passage-time calculation for a single (src, tgt) pair, in
+        units of WE iterations (NOT yet scaled by tau -- that scaling
+        happens in compute_mfpt_evolution, once, right before reporting).
+        """
         tgt_full = np.where(assignments == tgt_label)[0]
         tgt_active = np.array([f2a[b] for b in tgt_full if b in f2a])
         non_tgt = np.array([i for i in range(n_act) if i not in set(tgt_active)])
@@ -266,26 +250,40 @@ class wePCCA(weAnalysis):
         probs = probs / probs.sum()
         return float(np.sum(probs * mfpt_full[src_active]))
 
-    def compute_mfpt_evolution(self, all_iter_tms, assignments_full, pairs, out_dir):
+    def compute_mfpt_evolution(
+        self, all_iter_tms, assignments_full, pairs, out_dir, label_by_index=None
+    ):
         """
         Cumulative MFPT evolution for each (src_label, tgt_label) pair in
-        `pairs`. Generalized from pcca_master.py's version, which only
-        handled the hardcoded SC/TE/LN1 triple, to an arbitrary list of
-        label pairs (labels here are the integer indices returned by
-        load_bin_state_assignment, not the string labels themselves --
-        see run()).
+        `pairs` (integer state indices -- see run()). `label_by_index`,
+        if given, is used ONLY to build human-readable display strings
+        (e.g. "SC->TE" instead of "0->1") -- it never affects the
+        underlying math, which always operates on the integer indices.
+
+        Reported MFPT values are real time (iterations * tau), NOT
+        "tau^-1" -- that notation is for rates (see network.py/flux.py),
+        and MFPT is a time, never a rate. If tau is in seconds, these
+        values are in seconds.
         """
+
+        def label_for(idx):
+            if label_by_index is not None:
+                return label_by_index.get(idx, str(idx))
+            return str(idx)
+
         iters_sorted = sorted(all_iter_tms.keys())
         if not iters_sorted:
             return {}
-        burn_in = (
-            self.burn_in if self.burn_in is not None else int(0.2 * iters_sorted[-1])
-        )
+        # burn-in is just first-iter from the overarching analyses block
+        # (already resolved by set_iter_range in __init__) -- no separate
+        # concept needed.
+        burn_in = self.first_iter
         iter_stop_ci = max(iters_sorted) + 1
         eval_iters = list(range(burn_in, iter_stop_ci, self.step))
 
         pair_results = {
-            "{}->{}".format(s, t): {"iters": [], "mfpts": []} for s, t in pairs
+            "{}->{}".format(label_for(s), label_for(t)): {"iters": [], "mfpts": []}
+            for s, t in pairs
         }
 
         tm_cumsum = None
@@ -314,26 +312,36 @@ class wePCCA(weAnalysis):
             sp = self.stationary_prob(T_active, n_act)
 
             for src_label, tgt_label in pairs:
-                key = "{}->{}".format(src_label, tgt_label)
+                key = "{}->{}".format(label_for(src_label), label_for(tgt_label))
                 m = self.compute_mfpt_pair(
                     T_active, n_act, f2a, assignments_full, src_label, tgt_label, sp
                 )
                 if not np.isnan(m):
+                    # m is in units of WE iterations; * tau converts to
+                    # real time (see units note in the docstring above).
                     pair_results[key]["iters"].append(i)
                     pair_results[key]["mfpts"].append(m * self.tau)
 
         ci_results = {}
-        print(
-            "\n  {:>16}  {:>14}  {:>14}  {:>14}".format(
-                "Transition", "MFPT (tau^-1)", "CI lower", "CI upper"
+        lines = []
+        lines.append(
+            "{:>16}  {:>18}  {:>18}  {:>18}".format(
+                "Transition",
+                "MFPT (real time)",
+                "CI lower",
+                "CI upper",
             )
         )
-        print("  " + "-" * 65)
+        lines.append(
+            "(real time = iterations * tau; tau = {} -- if tau is in "
+            "seconds, these values are in seconds)".format(self.tau)
+        )
+        lines.append("-" * 75)
         for src_label, tgt_label in pairs:
-            key = "{}->{}".format(src_label, tgt_label)
+            key = "{}->{}".format(label_for(src_label), label_for(tgt_label))
             mfpts = np.array(pair_results[key]["mfpts"])
             if len(mfpts) < 10:
-                print("  {:>16}  insufficient data".format(key))
+                lines.append("{:>16}  insufficient data".format(key))
                 continue
             window = mfpts[-min(40, len(mfpts)) :]
             final = mfpts[-1]
@@ -341,22 +349,25 @@ class wePCCA(weAnalysis):
             ci_lo = final - 1.96 * sem
             ci_hi = final + 1.96 * sem
             ci_results[key] = (final, ci_lo, ci_hi)
-            print(
-                "  {:>16}  {:>14.3e}  {:>14.3e}  {:>14.3e}".format(
+            lines.append(
+                "{:>16}  {:>18.3e}  {:>18.3e}  {:>18.3e}".format(
                     key, final, ci_lo, ci_hi
                 )
             )
+        print()
+        for line in lines:
+            print("  " + line)
 
         fig, axes = plt.subplots(
             len(pairs), 1, figsize=(8, 4 * max(1, len(pairs))), squeeze=False
         )
         for ax_i, (src_label, tgt_label) in enumerate(pairs):
-            key = "{}->{}".format(src_label, tgt_label)
+            key = "{}->{}".format(label_for(src_label), label_for(tgt_label))
             iters = np.array(pair_results[key]["iters"])
             mfpts = np.array(pair_results[key]["mfpts"])
             ax = axes[ax_i][0]
             if len(mfpts) == 0:
-                ax.set_title("{}->{} (no data)".format(src_label, tgt_label))
+                ax.set_title("{} (no data)".format(key))
                 continue
             ax.plot(iters, mfpts, "b-", linewidth=1.5, label="Cumulative avg MFPT")
             if key in ci_results:
@@ -376,8 +387,8 @@ class wePCCA(weAnalysis):
                     label="95% CI: [{:.2e}, {:.2e}]".format(ci_lo, ci_hi),
                 )
             ax.set_xlabel("Iteration (cumulative avg from iter {})".format(burn_in))
-            ax.set_ylabel("MFPT (tau^-1)")
-            ax.set_title("{}->{} MFPT Convergence".format(src_label, tgt_label))
+            ax.set_ylabel("MFPT (real time; iterations * tau={})".format(self.tau))
+            ax.set_title("{} MFPT Convergence".format(key))
             ax.set_yscale("log")
             ax.legend(fontsize=7)
             ax.grid(True, alpha=0.3)
@@ -388,7 +399,7 @@ class wePCCA(weAnalysis):
         )
         plt.close()
         print("  Saved mfpt_evolution.png")
-        return ci_results
+        return ci_results, lines
 
     def plot_voronoi(
         self,
@@ -401,9 +412,6 @@ class wePCCA(weAnalysis):
     ):
         """
         2D projections of Voronoi bin centers colored by macrostate.
-        Generalized from pcca_master.py's plot_voronoi (which hardcoded
-        3 specific gene-pair panels) to plot every pair of dimensions
-        using whatever pcoord names are available.
         """
         ndim = centers.shape[1]
         dim_names = [self.names.get(i, str(i)) for i in range(ndim)]
@@ -456,23 +464,12 @@ class wePCCA(weAnalysis):
         print("  Saved {}".format(filename))
 
     # ------------------------------------------------------------------
-    # New code: reads the bin->state assignment out of w_assign's own
-    # assign.h5, instead of pcca_master.py's bespoke geometric
-    # classifier (which was hardcoded to the 8-gene system's specific
-    # thresholds and isn't general). This reuses WESTPA's own state
-    # membership logic -- the same thing states.yaml + w_assign already
-    # do for `network` -- rather than re-implementing region containment
-    # ourselves.
-    #
-    # NOTE: could not verify this against a real assign.h5 -- no h5py/
-    # WESTPA available in the environment this was written in. The
-    # dataset key names below (state_labels, bin_assignments) match
-    # WESTPA's documented w_assign output format, but this is the one
-    # piece of this file most likely to need a small correction on your
-    # first real run. If the key names are wrong, the actual h5 file
-    # will raise a clear KeyError naming what's missing, not silently
-    # give a wrong answer -- check that error against `h5dump -n
-    # assign.h5` or `h5py.File("assign.h5").keys()` if it happens.
+    # Reads the bin->state assignment out of w_assign's own assign.h5,
+    # using state_map -- a direct bin_idx -> state_idx lookup table
+    # w_assign already computes once, rather than re-deriving it from
+    # the per-segment trajectory data (which solves a different problem
+    # entirely -- tracing individual walkers through time, not "which
+    # state is this bin in").
     # ------------------------------------------------------------------
     def load_bin_state_assignment(self, assign_h5_path, nbins):
         with h5py.File(assign_h5_path, "r") as af:
@@ -480,39 +477,33 @@ class wePCCA(weAnalysis):
                 s.decode() if isinstance(s, bytes) else s
                 for s in af["state_labels"][:]
             ]
-            # per-iteration, per-bin -> state index (or len(state_labels)
-            # / -1 for "no state"). We only need one representative
-            # bin->state map, so we take the most recent iteration.
-            assignments_ds = af["bin_assignments"]
-            last_iter_assignments = assignments_ds[-1][:nbins]
+            # state_map: bin_idx -> state_idx, with any value outside
+            # [0, n_states) meaning "no state assigned" (WESTPA's
+            # standard catch-all for bins outside every defined state).
+            state_map = af["state_map"][:nbins]
+
+        n_states = len(state_labels_raw)
         assignments_full = np.full(nbins, -999, dtype=int)
-        for i, state_idx in enumerate(last_iter_assignments):
-            if 0 <= state_idx < len(state_labels_raw):
+        for i, state_idx in enumerate(state_map):
+            if 0 <= state_idx < n_states:
                 assignments_full[i] = state_idx
+
         label_by_index = {i: lbl for i, lbl in enumerate(state_labels_raw)}
         return assignments_full, label_by_index
 
     # ------------------------------------------------------------------
     # GPCCA+ diagnostic clustering -- switched from deeptime's
-    # MarkovStateModel.pcca() to pygpcca.GPCCA (already a webng
-    # dependency, never previously wired up anywhere in the codebase).
-    # Produces its own numbered clusters independent of states.yaml --
-    # see the class docstring for why cluster numbers are intentionally
-    # not auto-mapped onto your state labels.
-    #
-    # NOTE: could not run this against a real pygpcca install -- not
-    # available in the environment this was written in, and no network
-    # access to install it. Written against pygpcca's documented API
-    # (fetched directly from its docs, not from memory), but this is the
-    # other piece of this file most likely to need a small correction on
-    # your first real run.
+    # MarkovStateModel.pcca() to pygpcca.GPCCA. Produces its own numbered
+    # clusters independent of states.yaml -- see the class docstring for
+    # why cluster numbers are intentionally not auto-mapped onto your
+    # state labels.
     # ------------------------------------------------------------------
     def run_gpcca_diagnostic(self, tm_norm, centers, out_dir):
         try:
             import pygpcca as gp
         except ImportError:
             print("  pygpcca not available -- skipping GPCCA+ diagnostic")
-            return None
+            return None, ["GPCCA+ diagnostic: pygpcca not available, skipped"]
 
         nonzero_rows_idx = np.where(tm_norm.sum(axis=1) != 0)[0]
         T_visited = tm_norm[np.ix_(nonzero_rows_idx, nonzero_rows_idx)]
@@ -531,13 +522,19 @@ class wePCCA(weAnalysis):
         )
         try:
             gpcca = gp.GPCCA(T_sym)
-            gpcca.optimize({"m_min": self.n_clusters, "m_max": self.n_clusters})
+            # optimize(m) pins to exactly m clusters. The {"m_min":...,
+            # "m_max":...} dict form is for auto-selecting the best m
+            # over a real range (m_min < m_max) -- it rejects a
+            # degenerate range where both ends are equal, which is what
+            # happens if you pass n_clusters to both.
+            gpcca.optimize(self.n_clusters)
             hard_assignments_visited = gpcca.macrostate_assignment
             crispness = gpcca.optimal_crispness
             print("  Crispness: {:.4f}".format(crispness))
         except Exception as e:
-            print("  GPCCA+ failed: {}".format(e))
-            return None
+            msg = "GPCCA+ failed: {}".format(e)
+            print("  " + msg)
+            return None, [msg]
 
         nbins = tm_norm.shape[0]
         assignments_full = np.full(nbins, -999, dtype=int)
@@ -545,6 +542,42 @@ class wePCCA(weAnalysis):
             assignments_full[bin_idx] = hard_assignments_visited[i]
 
         label_map = {m: "C{}".format(m) for m in range(self.n_clusters)}
+
+        cg_tm = gpcca.coarse_grained_transition_matrix
+        cg_sp = gpcca.coarse_grained_stationary_probability
+
+        lines = []
+        lines.append(
+            "GPCCA+ diagnostic clustering (n_clusters={}, crispness={:.4f}):".format(
+                self.n_clusters, crispness
+            )
+        )
+        lines.append("{:>8}  {:>14}  {:>10}".format("Cluster", "Stat. prob.", "N bins"))
+        lines.append("-" * 36)
+        for m in range(self.n_clusters):
+            n_bins_in_cluster = int(np.sum(hard_assignments_visited == m))
+            lines.append(
+                "{:>8}  {:>14.4f}  {:>10d}".format(
+                    label_map[m], cg_sp[m], n_bins_in_cluster
+                )
+            )
+
+        lines.append("")
+        lines.append("Coarse-grained transition matrix (probability per WE iteration):")
+        header = " " * 8 + "".join(
+            "{:>10}".format(label_map[m]) for m in range(self.n_clusters)
+        )
+        lines.append(header)
+        for i in range(self.n_clusters):
+            row_str = "{:>8}".format(label_map[i]) + "".join(
+                "{:>10.4f}".format(cg_tm[i, j]) for j in range(self.n_clusters)
+            )
+            lines.append(row_str)
+
+        print()
+        for line in lines[1:]:  # skip the header line, already printed via "Crispness: ..." above
+            print("  " + line)
+
         self.plot_voronoi(
             centers,
             assignments_full,
@@ -559,7 +592,97 @@ class wePCCA(weAnalysis):
             "assignments": assignments_full,
             "coarse_grained_transition_matrix": gpcca.coarse_grained_transition_matrix,
             "coarse_grained_stationary_probability": gpcca.coarse_grained_stationary_probability,
+        }, lines
+
+    def summarize_states_yaml_partition(self, tm_norm, assignments_full, label_by_index):
+        """
+        Prints the same two metrics run_gpcca_diagnostic prints for its
+        own clusters -- stationary probability + bin count per state,
+        and the coarse-grained transition matrix -- but for the
+        states.yaml-labeled partition instead. This is the same
+        coarse-graining operation GPCCA+ does internally (aggregate a
+        bin-level transition matrix onto a hard partition, weighted by
+        each bin's own stationary probability), just applied to your
+        states.yaml assignment instead of GPCCA+'s own clustering, so
+        the two are directly comparable using the same numbers.
+
+        Bins not covered by any states.yaml label (assignment == -999)
+        are excluded entirely -- their probability mass isn't folded
+        into any state, by design (states.yaml only defines what it
+        defines; this isn't trying to infer coverage for unlabeled
+        bins).
+        """
+        nz_rows = np.where(tm_norm.sum(axis=1) != 0)[0]
+        T_active = tm_norm[np.ix_(nz_rows, nz_rows)]
+        n_active = len(nz_rows)
+        sp = self.stationary_prob(T_active, n_active)
+
+        state_indices = sorted(label_by_index.keys())
+        n_states = len(state_indices)
+
+        bins_per_state = {
+            s: [
+                act_idx
+                for act_idx, full_idx in enumerate(nz_rows)
+                if assignments_full[full_idx] == s
+            ]
+            for s in state_indices
         }
+
+        cg_sp = np.zeros(n_states)
+        cg_tm = np.zeros((n_states, n_states))
+        bin_counts = np.zeros(n_states, dtype=int)
+
+        for ii, si in enumerate(state_indices):
+            bins_i = bins_per_state[si]
+            bin_counts[ii] = len(bins_i)
+            weight_i = sp[bins_i].sum() if bins_i else 0.0
+            cg_sp[ii] = weight_i
+            if weight_i == 0:
+                continue
+            for jj, sj in enumerate(state_indices):
+                bins_j = bins_per_state[sj]
+                if not bins_j:
+                    continue
+                flux_ij = sp[bins_i][:, np.newaxis] * T_active[np.ix_(bins_i, bins_j)]
+                cg_tm[ii, jj] = flux_ij.sum() / weight_i
+
+        lines = []
+        lines.append(
+            "states.yaml partition summary (same metrics as the GPCCA+ "
+            "diagnostic below, for direct comparison):"
+        )
+        lines.append("{:>8}  {:>14}  {:>10}".format("State", "Stat. prob.", "N bins"))
+        lines.append("-" * 36)
+        for ii, si in enumerate(state_indices):
+            lines.append(
+                "{:>8}  {:>14.4f}  {:>10d}".format(
+                    label_by_index[si], cg_sp[ii], bin_counts[ii]
+                )
+            )
+
+        lines.append("")
+        lines.append("Coarse-grained transition matrix (probability per WE iteration):")
+        header = " " * 8 + "".join(
+            "{:>10}".format(label_by_index[si]) for si in state_indices
+        )
+        lines.append(header)
+        for ii, si in enumerate(state_indices):
+            row_str = "{:>8}".format(label_by_index[si]) + "".join(
+                "{:>10.4f}".format(cg_tm[ii, jj]) for jj in range(n_states)
+            )
+            lines.append(row_str)
+
+        print()
+        for line in lines:
+            print("  " + line)
+
+        return {
+            "stationary_probability": cg_sp,
+            "transition_matrix": cg_tm,
+            "bin_counts": bin_counts,
+            "state_order": [label_by_index[s] for s in state_indices],
+        }, lines
 
     def run(self):
         assign_h5 = "assign.h5"
@@ -567,15 +690,17 @@ class wePCCA(weAnalysis):
 
         assign_stamp = self.ensure_assign()
 
+        # runs from the sim folder (w_reweight needs its west.cfg)
         command = [
             "w_reweight",
             "init",
-            "-W", "{}".format(self.h5file_path),
-            "-a", "./analysis/{}".format(assign_h5),
-            "-o", "./analysis/{}".format(tmat_h5),
+            "-W", self.west_path,
+            "-a", os.path.abspath(assign_h5),
+            "-o", os.path.abspath(tmat_h5),
         ]
         self.run_westpa_tool(tmat_h5, command,
-                             self.stamp("w_reweight init", assign=assign_stamp), cwd="../")
+                             self.stamp("w_reweight init", assign=assign_stamp),
+                             cwd=self.sim_path)
 
         print("Building transition matrix...")
         tm_norm, all_iter_tms, nbins = self.build_transition_matrix(
@@ -597,13 +722,12 @@ class wePCCA(weAnalysis):
             for src, tgt in self.mfpt_pairs
             if src in index_by_label and tgt in index_by_label
         ]
-        # NOTE: cwd is already self.work_path (weAnalysis.__init__
-        # chdir'd there) -- matching every other analysis tool's
-        # convention (average.py/evolution.py/flux.py all savefig with
-        # a bare relative filename), out_dir here is "." not
-        # self.work_path, or paths would double up.
-        ci_results = self.compute_mfpt_evolution(
-            all_iter_tms, assignments_full, pairs_as_indices, "."
+        ci_results, mfpt_lines = self.compute_mfpt_evolution(
+            all_iter_tms, assignments_full, pairs_as_indices, ".", label_by_index
+        )
+
+        states_summary, states_lines = self.summarize_states_yaml_partition(
+            tm_norm, assignments_full, label_by_index
         )
 
         self.plot_voronoi(
@@ -616,7 +740,30 @@ class wePCCA(weAnalysis):
         )
 
         print("Running GPCCA+ diagnostic clustering...")
-        gpcca_results = self.run_gpcca_diagnostic(tm_norm, centers, ".")
+        gpcca_results, gpcca_lines = self.run_gpcca_diagnostic(tm_norm, centers, ".")
+
+        # Results only -- no progress messages ("Building transition
+        # matrix...") or save confirmations ("Saved X.png"), just the
+        # actual tables each section already printed.
+        report_lines = []
+        report_lines.append("MFPT between states.yaml-labeled macrostates")
+        report_lines.append("=" * 60)
+        report_lines.extend(mfpt_lines)
+        report_lines.append("")
+        report_lines.append("states.yaml partition summary")
+        report_lines.append("=" * 60)
+        report_lines.extend(states_lines[1:])  # skip states_lines' own duplicate title
+        report_lines.append("")
+        report_lines.append("GPCCA+ diagnostic clustering")
+        report_lines.append("=" * 60)
+        report_lines.extend(gpcca_lines[1:] if gpcca_results is not None else gpcca_lines)
+
+        with open("output_pcca.txt", "w") as f:
+            f.write("\n".join(report_lines) + "\n")
 
         os.chdir(self.curr_path)
-        return {"mfpt": ci_results, "gpcca": gpcca_results}
+        return {
+            "mfpt": ci_results,
+            "states_summary": states_summary,
+            "gpcca": gpcca_results,
+        }

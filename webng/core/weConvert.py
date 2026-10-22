@@ -2516,16 +2516,19 @@ separately runs an unsupervised GPCCA+ (`pygpcca`) coarse-graining of the same t
 matrix as a diagnostic. The two are intentionally not reconciled: GPCCA+'s numbered clusters
 are not automatically mapped onto your states.yaml labels -- compare the two Voronoi plots
 yourself to see whether your labeled regions line up with what the dynamics actually look
-like. All MFPT values are in units of tau^-1 unless multiplied by a real tau.'''))
+like. MFPT values are already converted to real time (iterations * tau) using whatever tau
+you set below -- if tau is in seconds, these values are in seconds. This is a time, not a
+rate, so it is never "tau^-1" (that notation describes rates, like the ones evolution/flux
+report).'''))
         nb.cells.append(nbf.v4.new_code_cell('''pcca_opts = {
     **analsyis_opts,
-    'tau': 10,               # Real time per WE iteration, used to convert MFPT into tau^-1 units
+    'sampling_options': {'tau': 10},  # tau = real time per WE iteration (e.g. seconds). pcca always reads tau from here, matching sampling_options in your main webng yaml
     'n-clusters': None,      # Number of GPCCA+ macrostates to look for. 'None' defaults to the number of states.yaml labels
-    'burn-in': None,         # Skip this many initial iterations before averaging. 'None' defaults to the first 20% of iterations
-    'step': 5,               # Evaluate cumulative MFPT convergence every N iterations
+    'step-iter': 5,          # Evaluate cumulative MFPT convergence every N iterations
     'mfpt-pairs': None,      # List of [source_label, target_label] pairs to compute MFPT for. 'None' computes every ordered pair of states.yaml labels
     'movement-h5': None,     # Optional path to a separate west.h5 (e.g. an earlier adaptive-binning phase) to load Voronoi bin centers from. 'None' uses this run's own west.h5
-}'''))
+}
+# Note: burn-in is just 'first-iter' above (from analsyis_opts) -- no separate option needed.'''))
         nb.cells.append(nbf.v4.new_code_cell('''os.chdir("..")
 pcca_obj = wb.pcca.wePCCA(pcca_opts)
 try:

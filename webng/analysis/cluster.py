@@ -21,44 +21,12 @@ class weCluster(weAnalysis):
         # Parse and set the arguments
         # get west.h5 path
         # self.system = platform.system()
-        self.h5file_path = os.path.join("..", "west.h5")
-        self.h5file = h5py.File(self.h5file_path, "r")
         self.set_dims(self._getd(opts, "dimensions", required=False))
-        # iterations
-        self.first_iter = self._getd(opts, "first-iter", default=None, required=False)
-        self.last_iter = self._getd(opts, "last-iter", default=None, required=False)
-        self.first_iter, self.last_iter = self.set_iter_range(
-            self.first_iter, self.last_iter
-        )
         self.bins = self._getd(opts, "bins", default=30, required=False)
         self.threshold = self._getd(opts, "threshold", default=90, required=True)
         self.min_samples = self._getd(opts, "min-samples", default=2, required=True)
         self.eps = self._getd(opts, "eps", default=1.5, required=True)
-
-    def set_dims(self, dims=None):
-        if dims is None:
-            dims = self.h5file["iterations/iter_{:08d}".format(1)]["pcoord"].shape[2]
-        self.dims = dims
-        # return the dimensionality if we need to
-        return self.dims
     
-    def set_names(self, names):
-        if names is not None:
-            self.names = dict(zip(range(len(names)), names))
-        else:
-            # We know the dimensionality, can assume a
-            # naming scheme if we don't have one
-            print("Giving default names to each dimension")
-            self.names = dict((i, str(i)) for i in range(self.dims))
-
-    def set_iter_range(self, first_iter, last_iter):
-        if first_iter is None:
-            first_iter = 1
-        if last_iter is None:
-            last_iter = self.h5file.attrs["west_current_iteration"] - 1
-
-        return first_iter, last_iter
-
     def run(self):
         datFile = self.ensure_pdist()
         # pdist.h5 already covers exactly first_iter..last_iter, so use every row
