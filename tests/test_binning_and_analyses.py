@@ -90,12 +90,10 @@ def build_sim():
             with open(yaml_path, "w") as f:
                 yaml.dump(opts, f)
 
-            # `webng setup` runs in its own process, as it does for users. With
-            # recycling it samples basis states through libssa, which can only
-            # be initialized once per process (its C globals are never freed;
-            # see test_recycling.py), so running it in this pytest process
-            # would crash the next build that samples. It also chdirs into the
-            # sim folder and doesn't come back, which is why paths here are absolute.
+            # `webng setup` runs in its own process, the way users run it. (This
+            # used to be required as well: libssa couldn't be initialized twice
+            # in one process, and setup left the caller inside the sim folder.
+            # Both are fixed, see test_libssa_reinit.py and test_setup_cwd.py.)
             _run_and_check(["webng", "setup", "--opts", yaml_path], "webng setup")
             os.chdir(sim_path)
             _run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")

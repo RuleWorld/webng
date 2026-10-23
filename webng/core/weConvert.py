@@ -2544,12 +2544,20 @@ os.chdir(curr_path)'''))
         runs the class functions in appropriate order to
         make the WESTPA simultion folder
         """
-        self.make_sim_folders()
-        if self.copy_run_net:
-            self.copy_run_network()
-        self.write_static_files()
-        self.run_BNGL_on_file()
-        self.sample_basis_states()
-        self.write_dynamic_files()
-        self.make_analysis_notebook()
+        # Setup works from inside the sim folder (make_sim_folders changes into
+        # it), so return to where we started when done, even if a step fails.
+        # Harmless from the command line, but a Python caller (a notebook, a
+        # script, the tests) would otherwise be left inside the sim folder.
+        start_dir = os.getcwd()
+        try:
+            self.make_sim_folders()
+            if self.copy_run_net:
+                self.copy_run_network()
+            self.write_static_files()
+            self.run_BNGL_on_file()
+            self.sample_basis_states()
+            self.write_dynamic_files()
+            self.make_analysis_notebook()
+        finally:
+            os.chdir(start_dir)
         return
