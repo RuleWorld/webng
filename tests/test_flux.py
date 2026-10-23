@@ -77,9 +77,15 @@ def test_several_target_lines_are_one_sink(tmp_path, monkeypatch):
                          (b.mean(), b.mean() - 0.2, b.mean() + 0.2)])
     fig, ax = fx.run()
 
+    # WESTPA's bootstrap, when it detects correlation between iterations,
+    # averages in blocks and drops leftover iterations that don't fill a final
+    # block (w_fluxanl behaves identically), so its "mean" can differ from the
+    # exact mean by a little. Whether it detects correlation depends on its own
+    # random draws, so compare to well within the total's noise, not exactly.
+    close = dict(abs=1e-3)
     total = a + b
     mean, lo, hi = fx.avg_flux
-    assert mean == pytest.approx(a.mean() + b.mean())        # means do add
+    assert mean == pytest.approx(a.mean() + b.mean(), **close)    # means do add
     assert lo <= mean <= hi
     assert hi - lo < 0.02                                      # vs 0.8 from adding the bounds
 
@@ -89,4 +95,4 @@ def test_several_target_lines_are_one_sink(tmp_path, monkeypatch):
     line = ax.lines[0]
     assert list(line.get_xdata()) == [min(1 + 5 * (k + 1), N_ITER) for k in range(8)]
     assert list(line.get_ydata()) == pytest.approx(
-        [total[:min(5 * (k + 1), N_ITER)].mean() for k in range(8)])
+        [total[:min(5 * (k + 1), N_ITER)].mean() for k in range(8)], **close)
