@@ -25,12 +25,11 @@ import pytest
 import yaml
 
 from webng.main import weBNGTest
-from conftest import requires_bng_lib
-from test_cli import _run_and_check
+from conftest import requires_bng_lib, TESTS_DIR, run_and_check
 
 pytestmark = requires_bng_lib       # the template's default propagator is bng
 
-tfold = os.path.dirname(os.path.abspath(__file__))
+tfold = TESTS_DIR
 N_ITER = 5
 ANALYSES = ["average", "evolution", "cluster", "network", "flux", "pcca"]
 
@@ -94,10 +93,10 @@ def build_sim():
             # used to be required as well: libssa couldn't be initialized twice
             # in one process, and setup left the caller inside the sim folder.
             # Both are fixed, see test_libssa_reinit.py and test_setup_cwd.py.)
-            _run_and_check(["webng", "setup", "--opts", yaml_path], "webng setup")
+            run_and_check(["webng", "setup", "--opts", yaml_path], "webng setup")
             os.chdir(sim_path)
-            _run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
-            _run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
+            run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
+            run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
         except BaseException:
             failed[style] = traceback.format_exc()
             print(failed[style])     # show it now, in case something later stops pytest early

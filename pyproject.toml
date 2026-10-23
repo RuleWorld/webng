@@ -7,3 +7,14 @@ requires = [
  'cement',
  'wheel',
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = [
+    # Deprecation warnings raised inside third-party packages we can't change
+    # (old pyparsing calls, cement's logging setup, pkg_resources). Filtering
+    # only these keeps any warning from WEBNG's own code visible.
+    "ignore::DeprecationWarning:bionetgen",
+    "ignore::DeprecationWarning:mdtraj",
+    "ignore::DeprecationWarning:cement",
+]

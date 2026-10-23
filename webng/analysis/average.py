@@ -191,7 +191,7 @@ class weAverage(weAnalysis):
                     if self.do_energy:
                         hist2d = -np.log(hist2d)
                     if self.data_smoothing_level is not None:
-                        hist2d = scipy.ndimage.filters.gaussian_filter(
+                        hist2d = scipy.ndimage.gaussian_filter(
                             hist2d, self.data_smoothing_level
                         )
                     e_dist = hist2d.T

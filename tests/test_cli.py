@@ -16,73 +16,15 @@ of which one is the current default.
 """
 import os
 import shutil
-import subprocess
-import sys
 
 import pytest
 import yaml
 from pytest import raises
 
 from webng.main import weBNGTest
-from conftest import requires_bng_lib, BNG_LIB_LOADABLE
+from conftest import requires_bng_lib, BNG_LIB_LOADABLE, TESTS_DIR, run_and_check
 
-tfold = os.path.dirname(__file__)
-
-
-# Markers that mean the run failed even when the exit code is 0. WESTPA has
-# been observed (see propagator investigation) to catch an internal
-# exception, print "exception caught; shutting down", and still exit 0 --
-# checking rc.returncode alone lets that kind of failure silently report as
-# a passing test.
-_FAILURE_MARKERS = ("exception caught", "Traceback (most recent call last)")
-
-
-def _dump_seg_logs():
-    """
-    WESTPA's executable propagator redirects each segment's runseg.sh
-    stdout/stderr to its own file under seg_logs/{iter:06d}-{seg:06d}.log
-    (see _executable_westcfg) -- none of that ever reaches this process's
-    own stdout/stderr, so every diagnostic runseg.sh prints is otherwise
-    invisible here. Dump them explicitly so they actually show up.
-    """
-    if not os.path.isdir("seg_logs"):
-        return
-    log_files = sorted(os.listdir("seg_logs"))
-    if not log_files:
-        print("seg_logs/ exists but is empty")
-        return
-    for name in log_files:
-        path = os.path.join("seg_logs", name)
-        print("--- seg_logs/{} ---".format(name))
-        try:
-            with open(path) as f:
-                print(f.read())
-        except Exception as e:
-            print("could not read {}: {}".format(path, e))
-        print("--- end seg_logs/{} ---".format(name))
-
-
-def _run_and_check(cmd, step_name):
-    """
-    Run a subprocess, print its output (so -s still shows it), and fail
-    the test if either the exit code is nonzero OR the output contains a
-    failure marker WESTPA prints even on an exit code of 0.
-    """
-    rc = subprocess.run(cmd, capture_output=True, text=True)
-    if rc.stdout:
-        print(rc.stdout)
-    if rc.stderr:
-        print(rc.stderr, file=sys.stderr)
-    _dump_seg_logs()
-    combined = (rc.stdout or "") + (rc.stderr or "")
-    assert rc.returncode == 0, "{} exited with code {}".format(step_name, rc.returncode)
-    for marker in _FAILURE_MARKERS:
-        assert marker not in combined, (
-            "{} exited 0 but its output contains {!r} -- this masks a "
-            "real failure inside the run (see captured output above)".format(
-                step_name, marker
-            )
-        )
+tfold = TESTS_DIR
 
 
 def test_webng():
@@ -205,8 +147,8 @@ class TestSetupAndRunByPropagator:
             # fresh process, so env.sh must be re-sourced in each one --
             # otherwise $RunNet is empty and run_network fails with a
             # cryptic "-o: command not found" (exit 127).
-            _run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
-            _run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
+            run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
+            run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
         finally:
             os.chdir(tfold)
             if os.path.isfile(fpath):
@@ -234,16 +176,18 @@ class TestDefaultSetupAndRun:
             shutil.rmtree(opath)
 
     @pytest.fixture(autouse=True, scope="class")
-    def _cleanup(self):
+    @classmethod
+    def _cleanup(cls):
         # class-scoped: runs ONCE before the first test in this class and
         # ONCE after the last one — NOT between test_setup and
         # test_simrun, which share state (test_setup creates tests/test/,
         # test_simrun depends on it still being there). A per-test-method
         # scope here would delete tests/test/ right after test_setup
-        # finishes, before test_simrun ever runs.
-        self._remove_default_artifacts()
+        # finishes, before test_simrun ever runs. (A classmethod, because
+        # pytest is deprecating class-scoped fixtures as instance methods.)
+        cls._remove_default_artifacts()
         yield
-        self._remove_default_artifacts()
+        cls._remove_default_artifacts()
 
     def test_setup(self):
         os.chdir(tfold)
@@ -276,5 +220,5 @@ class TestDefaultSetupAndRun:
     def test_simrun(self):
         fpath = os.path.join(tfold, "test")
         os.chdir(fpath)
-        _run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
-        _run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
+        run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
+        run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")

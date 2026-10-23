@@ -12,10 +12,10 @@ import sys
 import time
 
 import h5py
-import numpy as np
 import pytest
 
 from webng.analysis.analysis import weAnalysis, STAMP_ATTR
+from conftest import write_west
 
 FAKE_TOOL = """#!{python}
 import os, sys, h5py
@@ -48,7 +48,7 @@ def sim(tmp_path, monkeypatch):
 
     sim_dir = tmp_path / "sim"
     (sim_dir / "analysis").mkdir(parents=True)
-    set_west(sim_dir, 101)
+    write_west(sim_dir, 101)
     monkeypatch.chdir(sim_dir / "analysis")
 
     an = weAnalysis.__new__(weAnalysis)
@@ -62,13 +62,6 @@ def sim(tmp_path, monkeypatch):
         return names
 
     return sim_dir, an, take_calls
-
-
-def set_west(sim_dir, iteration, extra=0):
-    with h5py.File(sim_dir / "west.h5", "w") as f:
-        f.attrs["west_current_iteration"] = iteration
-        if extra:
-            f["padding"] = list(range(extra))   # changes the file's size
 
 
 def test_first_call_builds_and_stamps(sim):
@@ -101,11 +94,11 @@ def test_continued_or_replaced_run_rebuilds(sim):
     sim_dir, an, take_calls = sim
     an.ensure_pdist().close()
     take_calls()
-    set_west(sim_dir, 160)                      # run continued
+    write_west(sim_dir, 160)                    # run continued
     an.ensure_pdist().close()
     assert take_calls() == ["w_pdist"]
     time.sleep(0.01)
-    set_west(sim_dir, 160, extra=50)            # different run, same iteration count
+    write_west(sim_dir, 160, padding=50)        # different run, same iteration count
     an.ensure_pdist().close()
     assert take_calls() == ["w_pdist"]
 
@@ -191,7 +184,7 @@ def test_each_sim_gets_its_own_system_py(tmp_path, monkeypatch):
     for name in ["sim_a", "sim_b"]:
         (tmp_path / name).mkdir()
         (tmp_path / name / "system.py").write_text("WHICH = {!r}\n".format(name))
-        set_west(tmp_path / name, 11)
+        write_west(tmp_path / name, 11)
     for name in ["sim_a", "sim_b", "sim_a"]:
         an = weAnalysis({"sim_name": name, "work-path": None, "pcoords": ["A"]})
         try:
@@ -210,10 +203,7 @@ def test_each_sim_gets_its_own_system_py(tmp_path, monkeypatch):
 def _named_sim(tmp_path, ndim, cfg_names=None, section="bng"):
     """A sim whose west.h5 has `ndim` pcoord dimensions, optionally with a west.cfg naming them."""
     sim_dir = tmp_path / "sim"
-    sim_dir.mkdir()
-    with h5py.File(sim_dir / "west.h5", "w") as f:
-        f.attrs["west_current_iteration"] = 3
-        f.create_dataset("iterations/iter_00000001/pcoord", data=np.zeros((2, 3, ndim)))
+    write_west(sim_dir, 3, ndim=ndim)
     if cfg_names is not None:
         (sim_dir / "west.cfg").write_text(
             "# vi: set filetype=yaml :\n---\nwest:\n  {}:\n    data:\n      pcoords: {}\n"
