@@ -6,11 +6,13 @@ rebuild otherwise, and fail loudly when a tool fails.
 The WESTPA tools are replaced by tiny fake executables on PATH that log
 each call, so these run fast and don't need a real simulation.
 """
+import json
 import os
 import sys
 import time
 
 import h5py
+import numpy as np
 import pytest
 
 from webng.analysis.analysis import weAnalysis, STAMP_ATTR
@@ -199,3 +201,49 @@ def test_each_sim_gets_its_own_system_py(tmp_path, monkeypatch):
             an.h5file.close()
             os.chdir(an.curr_path)
     sys.modules.pop("system", None)
+
+
+# ---------------------------------------------------------------------------
+# pcoord names
+# ---------------------------------------------------------------------------
+
+def _named_sim(tmp_path, ndim, cfg_names=None, section="bng"):
+    """A sim whose west.h5 has `ndim` pcoord dimensions, optionally with a west.cfg naming them."""
+    sim_dir = tmp_path / "sim"
+    sim_dir.mkdir()
+    with h5py.File(sim_dir / "west.h5", "w") as f:
+        f.attrs["west_current_iteration"] = 3
+        f.create_dataset("iterations/iter_00000001/pcoord", data=np.zeros((2, 3, ndim)))
+    if cfg_names is not None:
+        (sim_dir / "west.cfg").write_text(
+            "# vi: set filetype=yaml :\n---\nwest:\n  {}:\n    data:\n      pcoords: {}\n"
+            .format(section, json.dumps(cfg_names)))
+
+
+def _names(tmp_path, monkeypatch, option_names):
+    monkeypatch.chdir(tmp_path)
+    an = weAnalysis({"sim_name": "sim", "work-path": None, "pcoords": option_names})
+    try:
+        return [an.names[i] for i in sorted(an.names)]
+    finally:
+        an.h5file.close()
+        os.chdir(an.curr_path)
+
+
+@pytest.mark.parametrize("section", ["bng", "librr"])
+def test_pcoord_names_come_from_west_cfg(tmp_path, monkeypatch, section):
+    """west.cfg records what the propagator wrote; analysis options listing
+    other names or another order (e.g. all 8 genes) must not win."""
+    _named_sim(tmp_path, 4, ["NANOG", "GATA6", "CDX2", "OCT4"], section)
+    all_genes = ["OCT4", "SOX2", "NANOG", "KLF4", "GATA6", "CDX2", "PBX1", "GCNF"]
+    assert _names(tmp_path, monkeypatch, all_genes) == ["NANOG", "GATA6", "CDX2", "OCT4"]
+
+
+def test_pcoord_names_fall_back_to_analysis_options(tmp_path, monkeypatch):
+    _named_sim(tmp_path, 2)        # no names in west.cfg, as for executable sims
+    assert _names(tmp_path, monkeypatch, ["Atot", "Btot"]) == ["Atot", "Btot"]
+
+
+def test_pcoord_name_count_mismatch_labels_by_number(tmp_path, monkeypatch):
+    _named_sim(tmp_path, 3)
+    assert _names(tmp_path, monkeypatch, ["Atot", "Btot"]) == ["0", "1", "2"]

@@ -1,4 +1,5 @@
 import sys, os, json, hashlib
+import yaml
 import subprocess as sbpc
 import h5py
 
@@ -75,14 +76,55 @@ class weAnalysis:
         self.dims = dims
         return self.dims
 
+    def _west_cfg_pcoord_names(self):
+        """
+        The pcoord names in the sim's west.cfg (west -> bng/librr -> data ->
+        pcoords), or None. The propagator reads this list to decide what it
+        writes, so it is exactly the order of west.h5's pcoord columns.
+        """
+        try:
+            with open(os.path.join(self.sim_path, "west.cfg")) as f:
+                cfg = yaml.safe_load(f) or {}
+        except (OSError, yaml.YAMLError):
+            return None
+        west = cfg.get("west") or {}
+        for section in ("bng", "librr"):
+            names = ((west.get(section) or {}).get("data") or {}).get("pcoords")
+            if names:
+                return [str(n) for n in names]
+        return None
+
     def set_names(self, names):
+        """
+        Names for west.h5's pcoord dimensions, by column. Prefers the sim's
+        west.cfg, which records what the propagator actually wrote; the analysis
+        options' pcoords list only matches if the sim was generated from those
+        same options unchanged. If the count doesn't match west.h5, dimensions
+        are labelled by number rather than guessed.
+        """
+        from_cfg = self._west_cfg_pcoord_names()
+        if from_cfg is not None:
+            if names is not None and list(names) != from_cfg:
+                print("Using pcoord names from {} {} rather than the analysis "
+                      "options' {}".format(os.path.join(self.sim_path, "west.cfg"),
+                                           from_cfg, list(names)))
+            names = from_cfg
+        try:
+            n_file = self.h5file["iterations/iter_{:08d}".format(1)]["pcoord"].shape[2]
+        except (KeyError, AttributeError):
+            n_file = None   # nothing to check against
+        if names is not None and n_file is not None and len(names) != n_file:
+            print("Warning: {} pcoord names given but west.h5 has {} pcoord "
+                  "dimensions; labelling dimensions by number instead".format(
+                      len(names), n_file))
+            names = None
         if names is not None:
             self.names = dict(zip(range(len(names)), names))
         else:
             # We know the dimensionality, can assume a
             # naming scheme if we don't have one
             print("Giving default names to each dimension")
-            dims = getattr(self, "dims", None) or self.set_dims()
+            dims = n_file or getattr(self, "dims", None) or self.set_dims()
             self.names = dict((i, str(i)) for i in range(dims))
 
     def set_iter_range(self, first_iter, last_iter):
