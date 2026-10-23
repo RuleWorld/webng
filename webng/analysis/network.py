@@ -54,9 +54,11 @@ class weNetwork(weAnalysis):
                              produced_at=os.path.join(self.sim_path, "direct.h5"),
                              log_path="direct_output.txt")
 
-        dirFile = h5py.File("direct.h5", "r")
-        rate_evolution = dirFile["rate_evolution"][:]
-        iter_range = np.linspace(self.first_iter,self.last_iter,len(rate_evolution))
+        # rate_evolution[window][from_state][to_state]: one record per
+        # evaluation window, with fields iter_start, iter_stop, expected,
+        # ci_lbound, ci_ubound (WESTPA's iter_block_ci_dtype). Read by name.
+        with h5py.File("direct.h5", "r") as dirFile:
+            rate_evolution = dirFile["rate_evolution"][:]
 
         figs = []
 
@@ -65,12 +67,12 @@ class weNetwork(weAnalysis):
                 if start_ind != end_ind:
                     start_state_label = self.state_labels[start_ind]
                     end_state_label = self.state_labels[end_ind]
-                    means = [time[start_ind][end_ind][2] for time in rate_evolution]
-                    ci_down = [time[start_ind][end_ind][3] for time in rate_evolution]
-                    ci_up = [time[start_ind][end_ind][4] for time in rate_evolution]
+                    rates = rate_evolution[:, start_ind, end_ind]
+                    # each window's estimate uses iterations up to iter_stop
+                    iters = rates["iter_stop"]
                     f, ax = plt.subplots(figsize=(8,6))
-                    ax.plot(iter_range,means,c='b')
-                    ax.fill_between(iter_range,ci_down,ci_up,color='b',alpha=0.15)
+                    ax.plot(iters, rates["expected"], c='b')
+                    ax.fill_between(iters, rates["ci_lbound"], rates["ci_ubound"], color='b', alpha=0.15)
                     ax.set_xlabel('Iteration')
                     ax.set_ylabel('Transition Rate $\\tau^{-1}$')
                     ax.set_title(f'{start_state_label}$\\rightarrow${end_state_label}')

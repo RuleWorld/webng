@@ -1,4 +1,5 @@
 import pickle, h5py, os, shutil, platform
+import yaml
 from sys import stdout
 import numpy as np
 import matplotlib.pyplot as plt
@@ -80,18 +81,18 @@ class weCluster(weAnalysis):
                 figs.append(f)
 
         print("printing macrostates")
-        yaml_texts = [""] * np.max(final_cluster_grid+1)
-        for index in np.ndindex(final_cluster_grid.shape):
-            midpoints = [datFile['midpoints_{}'.format(dim)][:][mid] for dim,mid in enumerate(index)]
-            label = final_cluster_grid[index]
-            if label > -1:
-                yaml_texts[label] += f"\n      - {midpoints}"
-        final_yaml_text = "states:"
-        for i in range(np.max(final_cluster_grid)+1):
-            final_yaml_text += f"\n  - label: state{i}\n    coords:"
-            final_yaml_text += yaml_texts[i]
+        # Each state's coords are the midpoints of its bins, as plain floats,
+        # written by a YAML library. (Formatting NumPy numbers as text gives
+        # "np.float64(0.5)" under NumPy 2, which YAML reads back as a string,
+        # so w_assign couldn't use the file.)
+        midpoints = [datFile['midpoints_{}'.format(d)][:] for d in range(final_cluster_grid.ndim)]
+        states = []
+        for label in range(int(final_cluster_grid.max()) + 1):
+            coords = [[float(midpoints[d][i]) for d, i in enumerate(index)]
+                      for index in zip(*np.where(final_cluster_grid == label))]
+            states.append({"label": "state{}".format(label), "coords": coords})
         with open("states.yaml", "w") as file:
-            file.write(final_yaml_text)
+            yaml.safe_dump({"states": states}, file, sort_keys=False, default_flow_style=None)
         
         os.chdir(self.curr_path)
         return figs
