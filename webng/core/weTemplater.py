@@ -88,6 +88,7 @@ class weTemplater:
                 "style": 'mabl',
                 "n_walkers": 50,
                 "n_split": 5,
+                "weight_cap_factor": 10.0,
                 "start": None,
                 "target": None,
                 "coord_weights": None,

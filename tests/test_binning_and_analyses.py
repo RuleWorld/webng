@@ -204,3 +204,97 @@ def test_rerun_reuses_cached_files(build_sim):
     before = os.path.getmtime(os.path.join(sim, "analysis", "pdist.h5"))
     _run_analyses(yaml_path, ["average", "evolution"])
     assert os.path.getmtime(os.path.join(sim, "analysis", "pdist.h5")) == before
+
+
+# ---------------------------------------------------------------------------
+# binning behavior, checked on the real runs above
+# ---------------------------------------------------------------------------
+
+def _opts(yaml_path):
+    with open(yaml_path) as f:
+        return yaml.safe_load(f)
+
+
+def _iterations(sim):
+    """[(n_iter, seg_index, pcoord)] for every finished iteration."""
+    with h5py.File(os.path.join(sim, "west.h5"), "r") as f:
+        last = int(f.attrs["west_current_iteration"]) - 1
+        return [(i, f["iterations/iter_{:08d}/seg_index".format(i)][:],
+                 f["iterations/iter_{:08d}/pcoord".format(i)][:])
+                for i in range(1, last + 1)]
+
+
+def test_regular_bins_hold_traj_per_bin_walkers(build_sim):
+    """Every occupied bin starts each iteration with exactly traj_per_bin walkers."""
+    yaml_path, sim = build_sim("regular")
+    opts = _opts(yaml_path)["binning_options"]
+    edges, per_bin = opts["boundaries"], opts["traj_per_bin"]
+    for n_iter, seg_index, pcoord in _iterations(sim)[1:]:     # iteration 1 is w_init's seeding
+        starts = pcoord[:, 0, :]
+        bins = [tuple(int(np.digitize(x, e)) for x, e in zip(p, edges)) for p in starts]
+        counts = {b: bins.count(b) for b in set(bins)}
+        assert set(counts.values()) == {per_bin}, (n_iter, counts)
+        assert seg_index["weight"].sum() == pytest.approx(1.0)
+
+
+def _voronoi_mappers(sim):
+    """The Voronoi bin mapper WESTPA stored for each finished iteration."""
+    import pickle
+    import sys
+    sys.path.insert(0, sim)
+    sys.modules.pop("system", None)           # unpickling needs THIS sim's system.py
+    try:
+        with h5py.File(os.path.join(sim, "west.h5"), "r") as f:
+            index, pickles = f["bin_topologies/index"][:], f["bin_topologies/pickles"]
+            last = int(f.attrs["west_current_iteration"]) - 1
+            mappers = []
+            for i in range(1, last + 1):
+                binhash = f["iterations/iter_{:08d}".format(i)].attrs["binhash"]
+                binhash = binhash if isinstance(binhash, bytes) else bytes(binhash, "utf-8")
+                row = next(r for r, entry in enumerate(index) if entry["hash"] == binhash)
+                mappers.append(pickle.loads(bytes(pickles[row, :index[row]["pickle_len"]].data)))
+            return mappers
+    finally:
+        sys.path.remove(sim)
+        sys.modules.pop("system", None)
+
+
+def test_adaptive_voronoi_adds_centers(build_sim):
+    yaml_path, sim = build_sim("adaptive")
+    max_centers = _opts(yaml_path)["binning_options"]["max_centers"]
+    n_centers = [len(m.centers) for m in _voronoi_mappers(sim)]
+    assert all(b >= a for a, b in zip(n_centers, n_centers[1:])), n_centers   # never removed
+    assert n_centers[-1] > n_centers[0], n_centers                            # actually added
+    assert n_centers[-1] <= max_centers
+
+
+def test_mabl_conserves_walkers_and_weight(build_sim):
+    yaml_path, sim = build_sim("mabl")
+    iterations = _iterations(sim)
+    counts = [len(seg_index) for _, seg_index, _ in iterations]
+    assert len(set(counts)) == 1, counts            # splits and merges balance
+    for n_iter, seg_index, _ in iterations:
+        assert seg_index["weight"].sum() == pytest.approx(1.0), n_iter
+
+
+def test_mabl_recycling(build_sim):
+    """No walker starts an iteration inside the recycle region; recycled
+    walkers restart inside the basis region."""
+    yaml_path, sim = build_sim("mabl")
+    recycling = _opts(yaml_path)["recycling"]
+    pcoords = _opts(yaml_path)["propagator_options"]["pcoords"]
+
+    def inside(region, point):
+        for entry in region:
+            d = pcoords.index(entry["observable"])
+            if entry.get("min") is not None and point[d] < entry["min"]:
+                return False
+            if entry.get("max") is not None and point[d] > entry["max"]:
+                return False
+        return True
+
+    for n_iter, seg_index, pcoord in _iterations(sim)[1:]:
+        for start, parent in zip(pcoord[:, 0, :], seg_index["parent_id"]):
+            assert not inside(recycling["recycle_region"], start), (n_iter, start)
+            if parent < 0:                          # a fresh or recycled walker
+                assert inside(recycling["basis_region"], start), (n_iter, start)
