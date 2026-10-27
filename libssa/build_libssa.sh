@@ -16,8 +16,13 @@
 #   libssa-linux-x86_64.so, libssa-linux-aarch64.so, libssa-macos-arm64.dylib
 # The <cpu> part is what Python's platform.machine() reports on that machine.
 #
-# Optional: LIBSSA_EXTRA_CFLAGS / LIBSSA_EXTRA_LDFLAGS add compiler / linker
-# flags (e.g. for testing a build under stricter settings).
+# Optional:
+#   LIBSSA_ARCH=x86_64    on macOS, build for another chip than this Mac's
+#                         (Apple's compiler can target Intel from Apple Silicon
+#                         and back). On Linux, build inside a container of the
+#                         target kind instead (see libssa/README.md).
+#   LIBSSA_EXTRA_CFLAGS / LIBSSA_EXTRA_LDFLAGS   extra compiler / linker flags
+#                         (e.g. for testing a build under stricter settings).
 #
 # Needs only a C/C++ compiler (gcc/g++ or clang), ar, and patch: muParser,
 # CVODE, and Mathutils are compiled directly from BioNetGen's bundled
@@ -36,7 +41,17 @@ case "$(uname -s)" in
     Darwin) OS=macos; EXT=dylib; SHARED="-dynamiclib" ;;
     *) echo "ERROR: unsupported OS $(uname -s) (Linux or macOS only; on Windows, use WSL)"; exit 1 ;;
 esac
-CPU="$(uname -m)"
+CPU="${LIBSSA_ARCH:-$(uname -m)}"
+ARCH_FLAGS=""
+if [ "$CPU" != "$(uname -m)" ]; then
+    if [ "$OS" = macos ]; then
+        ARCH_FLAGS="-arch $CPU"
+    else
+        echo "ERROR: building for $CPU on a $(uname -m) Linux machine isn't supported;"
+        echo "build inside a $CPU Linux container instead (see libssa/README.md)."
+        exit 1
+    fi
+fi
 PLATFORM="$OS-$CPU"
 OUTPUT="$SCRIPT_DIR/libssa-$PLATFORM.$EXT"
 echo "Building for: $PLATFORM  ->  $(basename "$OUTPUT")"
@@ -102,7 +117,7 @@ if [ ! -f "$MATHUTILS_DIR/libmathutils.a" ]; then
     # also refuses to compile them (they call functions they never declare).
     (cd "$MATHUTILS_DIR/Mathutils" && for f in *.c; do
         case "$f" in test*.c|eigensystem.c) continue ;; esac
-        "$CC" -O2 -fPIC ${LIBSSA_EXTRA_CFLAGS:-} -c "$f" -o "${f%.c}.o"
+        "$CC" $ARCH_FLAGS -O2 -fPIC ${LIBSSA_EXTRA_CFLAGS:-} -c "$f" -o "${f%.c}.o"
     done)
     ar rcs "$MATHUTILS_DIR/libmathutils.a" "$MATHUTILS_DIR"/Mathutils/*.o
     echo "Mathutils built."
@@ -119,7 +134,7 @@ if [ ! -f "$MUPARSER_DIR/libmuparser.a" ]; then
     (cd "$MUPARSER_DIR" && tar xzf "$LIBSOURCE/muparser_v2_2_4.tar.gz")
     MUP_SRC="$MUPARSER_DIR/muparser_v2_2_4"
     for f in "$MUP_SRC"/src/*.cpp; do
-        "$CXX" -O2 -fPIC -I"$MUP_SRC/include" -c "$f" -o "$MUPARSER_DIR/$(basename "${f%.cpp}").o"
+        "$CXX" $ARCH_FLAGS -O2 -fPIC -I"$MUP_SRC/include" -c "$f" -o "$MUPARSER_DIR/$(basename "${f%.cpp}").o"
     done
     ar rcs "$MUPARSER_DIR/libmuparser.a" "$MUPARSER_DIR"/*.o
     echo "muParser built."
@@ -150,9 +165,9 @@ EOF
     # cvode_lapack.c needs LAPACK, which this build doesn't use
     for f in "$CV_SRC"/src/cvode/*.c "$CV_SRC"/src/sundials/*.c; do
         [ "$(basename "$f")" = "cvode_lapack.c" ] && continue
-        "$CC" -O2 -fPIC ${LIBSSA_EXTRA_CFLAGS:-} $CV_INC -c "$f" -o "$CVODE_DIR/obj_cvode/$(basename "${f%.c}").o"
+        "$CC" $ARCH_FLAGS -O2 -fPIC ${LIBSSA_EXTRA_CFLAGS:-} $CV_INC -c "$f" -o "$CVODE_DIR/obj_cvode/$(basename "${f%.c}").o"
     done
-    "$CC" -O2 -fPIC ${LIBSSA_EXTRA_CFLAGS:-} $CV_INC -c "$CV_SRC/src/nvec_ser/nvector_serial.c" -o "$CVODE_DIR/obj_nvec/nvector_serial.o"
+    "$CC" $ARCH_FLAGS -O2 -fPIC ${LIBSSA_EXTRA_CFLAGS:-} $CV_INC -c "$CV_SRC/src/nvec_ser/nvector_serial.c" -o "$CVODE_DIR/obj_nvec/nvector_serial.o"
     ar rcs "$CVODE_DIR/libsundials_cvode.a" "$CVODE_DIR"/obj_cvode/*.o
     ar rcs "$CVODE_DIR/libsundials_nvecserial.a" "$CVODE_DIR"/obj_nvec/*.o
     echo "CVODE built."
@@ -198,7 +213,7 @@ LIBS="\
     $CVODE_DIR/libsundials_nvecserial.a \
     $MATHUTILS_DIR/libmathutils.a"
 
-"$CXX" -std=c++11 -O2 -fPIC $SHARED \
+"$CXX" $ARCH_FLAGS -std=c++11 -O2 -fPIC $SHARED \
     -DRUN_NETWORK_VERSION=\"3.0\" \
     $INCLUDES \
     "$SCRIPT_DIR/ssa_wrapper.cpp" \
