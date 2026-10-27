@@ -1,9 +1,11 @@
-# Runs the WEBNG test suite on every push and pull request, on each supported
-# Python version.
+# Runs the WEBNG test suite on every push and pull request: on Linux and on
+# macOS (Apple Silicon), for each supported Python version. Each runs the full
+# suite, real simulations included, with WEBNG's libssa build for that
+# platform (see libssa/README.md).
 #
-# Only Linux runners for now. WEBNG ships libssa builds for macOS too (see
-# libssa/README.md and the libssa-builds workflow), and the full suite has
-# passed on an Apple Silicon Mac, but macOS isn't in this matrix yet.
+# macOS runners are scarce (a few at a time, shared across the organization),
+# so the macOS jobs can wait in a queue before starting. If that becomes a
+# problem, test macOS on one Python version only.
 #
 # NOTE: this workflow only runs tests. Publishing to PyPI (twine upload)
 # is still commented out below pending the packaging/versioning decisions
@@ -24,11 +26,13 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
+        os: [ubuntu-latest, macos-latest]
         # Every Python version WEBNG supports. (Anaconda stopped building new
         # Python 3.10 packages for its main channel at the end of October 2026,
         # so newer versions need to keep working.)
