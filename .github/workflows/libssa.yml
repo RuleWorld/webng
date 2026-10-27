@@ -1,0 +1,93 @@
+# Builds libssa from this repository's sources on every platform WEBNG ships a
+# build for, and checks both that fresh build and the shipped one in
+# webng/assets/ on the kind of machine they target (libssa/check_libssa.py).
+#
+# Runs only when something libssa-related changes. The fresh builds are
+# uploaded as artifacts of the run: to update the shipped builds after
+# changing libssa's sources, download them from the run's summary page and
+# commit them to webng/assets/, instead of building by hand on each platform.
+
+name: libssa-builds
+
+on:
+  push:
+    paths:
+      - "libssa/**"
+      - "webng/assets/libssa-*"
+      - ".github/workflows/libssa.yml"
+  pull_request:
+    paths:
+      - "libssa/**"
+      - "webng/assets/libssa-*"
+      - ".github/workflows/libssa.yml"
+  workflow_dispatch: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-latest
+            file: libssa-linux-x86_64.so
+          - platform: linux-aarch64
+            # GitHub's ARM Linux runners (free for public repositories)
+            runner: ubuntu-24.04-arm
+            file: libssa-linux-aarch64.so
+          - platform: macos-arm64
+            runner: macos-latest
+            file: libssa-macos-arm64.dylib
+          - platform: macos-x86_64
+            # Built on an Apple Silicon runner for Intel (LIBSSA_ARCH), then
+            # checked with an Intel Python, which runs under Rosetta
+            runner: macos-latest
+            arch: x86_64
+            python-arch: x64
+            file: libssa-macos-x86_64.dylib
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Check out BioNetGen (stock source; build_libssa.sh applies WEBNG's patch)
+      uses: actions/checkout@v4
+      with:
+        repository: RuleWorld/bionetgen
+        path: bionetgen
+        fetch-depth: 1
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+        architecture: ${{ matrix.python-arch || '' }}
+
+    - name: Install NumPy (all check_libssa.py needs)
+      run: python -m pip install numpy
+
+    - name: Build libssa from this repository's sources
+      env:
+        LIBSSA_ARCH: ${{ matrix.arch || '' }}
+        NETWORK3_SRC: ${{ github.workspace }}/bionetgen/bng2/Network3/src
+        LIBSOURCE: ${{ github.workspace }}/bionetgen/bng2/libsource
+      run: bash libssa/build_libssa.sh
+
+    - name: Check the fresh build
+      run: python libssa/check_libssa.py libssa/${{ matrix.file }}
+
+    - name: Check the shipped build
+      run: python libssa/check_libssa.py webng/assets/${{ matrix.file }}
+
+    - name: Upload the fresh build
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ matrix.file }}
+        path: libssa/${{ matrix.file }}
+        if-no-files-found: error
