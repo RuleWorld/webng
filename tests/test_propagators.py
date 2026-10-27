@@ -219,7 +219,7 @@ class TestExecutableWestcfg:
 
 
 # ---------------------------------------------------------------------------
-# bng lib path resolution (bundled asset vs. explicit override)
+# bng lib path resolution (per-platform bundled builds vs. explicit override)
 # ---------------------------------------------------------------------------
 
 class TestResolveBngLibPath:
@@ -227,12 +227,41 @@ class TestResolveBngLibPath:
         wc = bare_weconvert(libssa_path="/some/custom/path/libssa.so")
         assert wc._resolve_bng_lib_path() == "/some/custom/path/libssa.so"
 
-    def test_falls_back_to_bundled_asset(self, bare_weconvert):
+    @pytest.mark.parametrize("system, machine, expected", [
+        ("Linux", "x86_64", "libssa-linux-x86_64.so"),
+        ("Linux", "aarch64", "libssa-linux-aarch64.so"),
+        ("Darwin", "arm64", "libssa-macos-arm64.dylib"),
+        ("Darwin", "x86_64", "libssa-macos-x86_64.dylib"),
+    ])
+    def test_bundled_build_named_by_platform(self, bare_weconvert, system, machine, expected):
+        assert bare_weconvert()._bng_lib_name(system, machine) == expected
+
+    def test_falls_back_to_this_platforms_bundled_build(self, bare_weconvert):
         import os
         wc = bare_weconvert(libssa_path=None)
         resolved = wc._resolve_bng_lib_path()
-        assert resolved.endswith(os.path.join("assets", "libssa.so"))
+        assert resolved.endswith(os.path.join("assets", wc._bng_lib_name()))
         assert os.path.isfile(resolved), (
-            "bundled libssa.so not found — did you forget to add it "
-            "under webng/assets/?"
+            "no bundled libssa build for this platform ({}) -- build one with "
+            "libssa/build_libssa.sh and add it under webng/assets/".format(wc._bng_lib_name())
         )
+
+    def test_platform_without_a_build_gives_a_clear_error(self, bare_weconvert, tmp_path, monkeypatch):
+        import platform
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(platform, "system", lambda: "Windows")
+        monkeypatch.setattr(platform, "machine", lambda: "AMD64")
+        wc = bare_weconvert(libssa_path=None)
+        with pytest.raises(SystemExit) as exit_info:
+            wc._copy_bng_lib()
+        message = str(exit_info.value)
+        assert "Windows-AMD64" in message and "WSL" in message
+        assert "libssa-linux-x86_64.so" in message        # lists the builds that do exist
+        assert not (tmp_path / "libssa.so").exists()
+
+    def test_setup_copies_the_build_as_libssa_so(self, bare_weconvert, tmp_path, monkeypatch):
+        """The generated propagator loads 'libssa.so' whatever the platform."""
+        monkeypatch.chdir(tmp_path)
+        wc = bare_weconvert(libssa_path=None)
+        wc._copy_bng_lib()
+        assert (tmp_path / "libssa.so").read_bytes() == open(wc._resolve_bng_lib_path(), "rb").read()

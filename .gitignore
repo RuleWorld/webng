@@ -8,10 +8,14 @@ __pycache__/
 
 # C extensions
 *.so
-!webng/assets/libssa.so
+# ...except the libssa builds WEBNG ships, one per platform
+!webng/assets/libssa-*.so
 
-# libssa build products (build_libssa.sh creates this folder; the script itself is tracked)
+# libssa build products: build_libssa.sh's work folder, and the library it
+# writes next to itself (copy that into webng/assets/ to ship it). The script
+# and its sources are tracked.
 libssa/build_libssa/
+libssa/libssa-*
 
 # Distribution / packaging
 .Python

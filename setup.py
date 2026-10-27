@@ -7,6 +7,10 @@ f = open("README.md", "r")
 LONG_DESCRIPTION = f.read()
 f.close()
 
+# Minimum versions are the oldest seen working with this WEBNG: older WESTPA
+# (e.g. 2022.12) breaks the executable propagator's pcoord loader and
+# per-iteration bin mapper records, and libroadrunner before 2.8 can fail to
+# load under NumPy 2.
 INSTALL_REQUIRES = [
     "numpy",
     "cement",
@@ -15,10 +19,10 @@ INSTALL_REQUIRES = [
     "seaborn",
     "h5py",
     "pygpcca",
-    "bionetgen>=0.7.5",
-    "libroadrunner",
+    "bionetgen>=0.8.7",
+    "libroadrunner>=2.8.0",
     "networkx",
-    "westpa>=2022.01",
+    "westpa>=2022.15",
     "scikit-learn",
     "nbformat"
 ]

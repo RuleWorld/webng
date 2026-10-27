@@ -1111,33 +1111,58 @@ class weConvert:
         with open("bng_propagator.py", "w") as f:
             f.write(full_text)
 
+    @staticmethod
+    def _bng_lib_name(system=None, machine=None):
+        """
+        The bundled libssa build for a platform, by name:
+        libssa-<os>-<cpu>.<so|dylib>, where <cpu> is what platform.machine()
+        reports (e.g. libssa-linux-x86_64.so, libssa-macos-arm64.dylib).
+        build_libssa.sh names its output the same way. Defaults to this machine.
+        """
+        system = system or platform.system()
+        machine = machine or platform.machine()
+        os_name, ext = {"Linux": ("linux", "so"), "Darwin": ("macos", "dylib")}.get(
+            system, (system.lower(), "so"))
+        return "libssa-{}-{}.{}".format(os_name, machine, ext)
+
+    @staticmethod
+    def _bng_assets_dir():
+        core_dir = os.path.dirname(os.path.abspath(__file__))   # webng/core
+        return os.path.join(os.path.dirname(core_dir), "assets")  # webng/assets
+
     def _resolve_bng_lib_path(self):
         """
-        Where to find libssa.so:
+        Where to find libssa:
           1. propagator_options.libssa_path, if the user set one (e.g. a
              custom local build), or
-          2. the copy bundled with the WEBNG package at webng/assets/libssa.so.
+          2. the build bundled with the WEBNG package for this platform,
+             webng/assets/libssa-<os>-<cpu>.<so|dylib> (see _bng_lib_name).
         """
         if getattr(self, "libssa_path", None):
             return self.libssa_path
-        core_dir = os.path.dirname(os.path.abspath(__file__))   # webng/core
-        pkg_root = os.path.dirname(core_dir)                    # webng/
-        return os.path.join(pkg_root, "assets", "libssa.so")
+        return os.path.join(self._bng_assets_dir(), self._bng_lib_name())
 
     def _copy_bng_lib(self):
         """
-        Copies libssa.so into the simulation root, alongside
-        bng_propagator.py. ctypes.CDLL is loaded relative to the
-        propagator's __file__, so the two must be co-located.
+        Copies libssa into the simulation root as libssa.so, alongside
+        bng_propagator.py, which loads it by that name relative to its own
+        __file__ (the .so name works for a macOS build too; ctypes doesn't
+        care about the extension).
         """
         src = self._resolve_bng_lib_path()
         if not os.path.isfile(src):
+            assets = self._bng_assets_dir()
+            bundled = sorted(f for f in os.listdir(assets) if f.startswith("libssa-")) \
+                if os.path.isdir(assets) else []
+            hint = ("On Windows, run WEBNG under WSL, where the Linux build works. "
+                    if platform.system() == "Windows" else "")
             sys.exit(
-                "Could not find libssa.so at '{}'.\n"
-                "It should ship bundled with WEBNG at webng/assets/libssa.so; "
-                "if you're running from a source checkout that doesn't have "
-                "it yet, build it with build_libssa.sh and set "
-                "propagator_options.libssa_path to the result.".format(src)
+                "No libssa build for this platform ({}-{}): expected '{}'.\n"
+                "Builds bundled with this WEBNG: {}.\n"
+                "{}Build one for this machine with libssa/build_libssa.sh, then "
+                "copy it into webng/assets/ or set propagator_options.libssa_path "
+                "to it.".format(platform.system(), platform.machine(), src,
+                                ", ".join(bundled) or "none", hint)
             )
         shutil.copyfile(src, "libssa.so")
 
@@ -1151,10 +1176,11 @@ class weConvert:
         lib_path = self._resolve_bng_lib_path()
         if not os.path.isfile(lib_path):
             sys.exit(
-                "[recycling] Could not find libssa.so at '{}'.\n"
-                "It should ship bundled with WEBNG at webng/assets/libssa.so; "
-                "if missing, build it with build_libssa.sh and set "
-                "propagator_options.libssa_path.".format(lib_path)
+                "[recycling] No libssa build for this platform ({}-{}): "
+                "expected '{}'.\nBuild one for this machine with "
+                "libssa/build_libssa.sh, then copy it into webng/assets/ or set "
+                "propagator_options.libssa_path to it.".format(
+                    platform.system(), platform.machine(), lib_path)
             )
         try:
             lib = ctypes.CDLL(lib_path)
