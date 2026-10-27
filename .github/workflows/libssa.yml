@@ -47,10 +47,14 @@ jobs:
             file: libssa-macos-arm64.dylib
           - platform: macos-x86_64
             # Built on an Apple Silicon runner for Intel (LIBSSA_ARCH), then
-            # checked with an Intel Python, which runs under Rosetta
+            # checked under Rosetta. setup-python's "x64" macOS Python is
+            # universal (Intel and Apple Silicon in one program), and macOS
+            # would start its Apple Silicon half, so the Python steps are run
+            # through `arch -x86_64` to start the Intel half.
             runner: macos-latest
             arch: x86_64
             python-arch: x64
+            run-as: arch -x86_64
             file: libssa-macos-x86_64.dylib
 
     steps:
@@ -70,7 +74,8 @@ jobs:
         architecture: ${{ matrix.python-arch || '' }}
 
     - name: Install NumPy (all check_libssa.py needs)
-      run: python -m pip install numpy
+      # through run-as, so pip picks the NumPy build for that chip
+      run: ${{ matrix.run-as }} python -m pip install numpy
 
     - name: Build libssa from this repository's sources
       env:
@@ -80,10 +85,10 @@ jobs:
       run: bash libssa/build_libssa.sh
 
     - name: Check the fresh build
-      run: python libssa/check_libssa.py libssa/${{ matrix.file }}
+      run: ${{ matrix.run-as }} python libssa/check_libssa.py libssa/${{ matrix.file }}
 
     - name: Check the shipped build
-      run: python libssa/check_libssa.py webng/assets/${{ matrix.file }}
+      run: ${{ matrix.run-as }} python libssa/check_libssa.py webng/assets/${{ matrix.file }}
 
     - name: Upload the fresh build
       uses: actions/upload-artifact@v4

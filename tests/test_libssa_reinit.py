@@ -16,6 +16,7 @@ Each check runs in a subprocess with a timeout, so a regression fails the test
 instead of crashing or hanging pytest.
 """
 import json
+import platform
 import subprocess
 import sys
 
@@ -66,10 +67,17 @@ print("RESULTS " + json.dumps(results))
 """
 
 
+def _this_python():
+    """This same Python on this same chip (see libssa/check_libssa.py)."""
+    if platform.system() == "Darwin":
+        return ["arch", "-" + platform.machine(), sys.executable]
+    return [sys.executable]
+
+
 def _run(*specs):
     lib = make_bare_weconvert()._resolve_bng_lib_path()
     try:
-        proc = subprocess.run([sys.executable, "-c", RUNNER, lib, *specs],
+        proc = subprocess.run(_this_python() + ["-c", RUNNER, lib, *specs],
                               capture_output=True, text=True, timeout=120,
                               stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:

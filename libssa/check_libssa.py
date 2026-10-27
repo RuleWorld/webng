@@ -81,9 +81,21 @@ print("RESULTS " + json.dumps(results))
 """
 
 
+def this_python():
+    """
+    A command for this same Python on this same chip. On macOS a universal
+    Python (Intel and Apple Silicon in one program) started under Rosetta must
+    start its children under Rosetta too, or they'd run the other half, which
+    can't load this build.
+    """
+    if platform.system() == "Darwin":
+        return ["arch", "-" + platform.machine(), sys.executable]
+    return [sys.executable]
+
+
 def run(lib, *specs):
     try:
-        proc = subprocess.run([sys.executable, "-c", RUNNER, lib, *specs],
+        proc = subprocess.run(this_python() + ["-c", RUNNER, lib, *specs],
                               capture_output=True, text=True, timeout=120,
                               stdin=subprocess.DEVNULL)
     except subprocess.TimeoutExpired:
