@@ -47,7 +47,16 @@ class weBNGBase(cement.Controller):
                     "type": str,
                     "required": True,
                 },
-            )
+            ),
+            (
+                ["--overwrite"],
+                {
+                    "help": "Replace the simulation folder if it already exists. "
+                    + "This deletes everything in it, including any west.h5.",
+                    "action": "store_true",
+                    "default": False,
+                },
+            ),
         ],
     )
     def setup(self):

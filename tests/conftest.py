@@ -86,6 +86,7 @@ def make_bare_weconvert(**attrs):
         pcoord_list=["NANOG", "GATA6"],
         gillespie_update_interval=1,
         libssa_path=None,
+        max_wallclock="72:00:00",
     )
     defaults.update(attrs)
     for k, v in defaults.items():

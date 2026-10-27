@@ -27,9 +27,33 @@ class weConvert:
         take arguments from cement app and get ready to write
         """
         self.opts = self._load_yaml(args.opts)
+        # replace an existing sim folder (webng setup --overwrite)
+        self.overwrite = bool(getattr(args, "overwrite", False))
         self._parse_opts(self.opts)
         # TODO: make this optional somewhere else
         self.copy_run_net = True
+
+    @staticmethod
+    def _parse_wallclock(value):
+        """
+        sampling_options.max_wallclock -> "HH:MM:SS" for west.cfg's
+        max_run_wallclock (WESTPA ends a run cleanly before exceeding it).
+        Accepts "HH:MM:SS" text with any number of hours, or a number of
+        seconds: YAML reads an unquoted 72:00:00 as a base-60 number of
+        seconds (259200), so an options file may hand us either form.
+        """
+        if isinstance(value, bool):
+            value = None
+        if isinstance(value, (int, float)) and value > 0:
+            seconds = int(value)
+            return "{}:{:02d}:{:02d}".format(seconds // 3600, seconds % 3600 // 60, seconds % 60)
+        text = str(value).strip()
+        parts = text.split(":")
+        if (len(parts) == 3 and all(p.isdigit() for p in parts)
+                and int(parts[1]) < 60 and int(parts[2]) < 60 and any(int(p) for p in parts)):
+            return "{}:{}:{}".format(int(parts[0]), parts[1].zfill(2), parts[2].zfill(2))
+        sys.exit("sampling_options.max_wallclock must be HH:MM:SS (e.g. 72:00:00 "
+                 "for 3 days, 720:00:00 for 30), got {!r}".format(value))
 
     def _getd(self, dic, key, default=None, required=True):
         val = dic.get(key, default)
@@ -75,6 +99,8 @@ class weConvert:
         self.max_iter = self._getd(sampling_options, "max_iter", default=100)
         self.dims = self._getd(sampling_options, "dimensions")
         self.plen = self._getd(sampling_options, "pcoord_length")
+        self.max_wallclock = self._parse_wallclock(
+            sampling_options.get("max_wallclock", "72:00:00"))
 
         # binning options
         binning_options = self._getd(self.opts, "binning_options")
@@ -1982,7 +2008,6 @@ class weConvert:
         """
         the WESTPA configuration file, another YAML file
         """
-        # TODO: Expose max wallclock time?
         if self.propagator_type == "executable":
             self._executable_westcfg()
         elif self.propagator_type == "libRoadRunner":
@@ -2026,7 +2051,7 @@ class weConvert:
             "    module_path: $WEST_SIM_ROOT",
             "  propagation:",
             "    max_total_iterations: {}".format(self.max_iter),
-            "    max_run_wallclock:    72:00:00",
+            "    max_run_wallclock:    {}".format(self.max_wallclock),
             "    propagator:           bng_propagator.bngPropagator",
             "    gen_istates:          {}".format(gen_istates),
             "    block_size:           {}".format(self.block_size),
@@ -2096,7 +2121,7 @@ class weConvert:
             "    module_path: $WEST_SIM_ROOT",
             "  propagation:",
             "    max_total_iterations: {}".format(self.max_iter),
-            "    max_run_wallclock:    72:00:00",
+            "    max_run_wallclock:    {}".format(self.max_wallclock),
             "    propagator:           libRR_propagator.librrPropagator ",
             "    gen_istates:          {}".format(gen_istates),
             "    block_size:           {}".format(self.block_size),
@@ -2163,7 +2188,7 @@ class weConvert:
             "    module_path: $WEST_SIM_ROOT",
             "  propagation:",
             "    max_total_iterations: {}".format(self.max_iter),
-            "    max_run_wallclock:    72:00:00",
+            "    max_run_wallclock:    {}".format(self.max_wallclock),
             "    propagator:           executable",
             "    gen_istates:          false",
             "    block_size:           {}".format(self.block_size),
@@ -2373,12 +2398,22 @@ class weConvert:
         make folders WESTPA needs
         """
         self.sim_dir = self.fname
-        try:
-            os.makedirs(self.fname)
-        except FileExistsError as e:
-            # TODO: make an overwrite option
-            print(f"The folder {self.fname} you are trying to create already exists")
-            print(e)
+        if os.path.exists(self.fname):
+            if not getattr(self, "overwrite", False):
+                sys.exit(
+                    "The simulation folder '{}' already exists. Choose another "
+                    "path_options.sim_name, delete the folder, or run "
+                    "`webng setup --overwrite` to replace it (which deletes "
+                    "everything in it, including any west.h5).".format(self.fname))
+            # never delete the folder we're in, or one above it
+            target, here = os.path.realpath(self.fname), os.path.realpath(os.getcwd())
+            if target == here or here.startswith(target + os.sep):
+                sys.exit("Refusing to overwrite '{}': it is the current folder or "
+                         "contains it. Set path_options.sim_name to a subfolder."
+                         .format(self.fname))
+            print("Overwriting the existing simulation folder '{}'".format(self.fname))
+            shutil.rmtree(self.fname)
+        os.makedirs(self.fname)
         os.chdir(self.fname)
         os.makedirs("bngl_conf")
         os.makedirs("bstates")

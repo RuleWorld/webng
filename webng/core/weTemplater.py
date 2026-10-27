@@ -118,6 +118,7 @@ class weTemplater:
                 "max_iter": 100,
                 "pcoord_length": 10,
                 "tau": 10,
+                "max_wallclock": "72:00:00",
             },
             "analyses": {
                 "enabled": False,

@@ -219,6 +219,44 @@ class TestExecutableWestcfg:
 
 
 # ---------------------------------------------------------------------------
+# max_run_wallclock (sampling_options.max_wallclock)
+# ---------------------------------------------------------------------------
+
+class TestWallclock:
+    @pytest.mark.parametrize("value, expected", [
+        ("72:00:00", "72:00:00"),
+        ("720:00:00", "720:00:00"),
+        ("1:30:00", "1:30:00"),
+        (259200, "72:00:00"),        # an unquoted 72:00:00 in YAML arrives as base-60 seconds
+        (2592000, "720:00:00"),
+    ])
+    def test_accepted_forms(self, bare_weconvert, value, expected):
+        assert bare_weconvert()._parse_wallclock(value) == expected
+
+    def test_yaml_unquoted_value_round_trips(self, bare_weconvert):
+        import yaml
+        value = yaml.safe_load("max_wallclock: 720:00:00")["max_wallclock"]
+        assert bare_weconvert()._parse_wallclock(value) == "720:00:00"
+
+    @pytest.mark.parametrize("bad", ["3 days", "72:00", "1:75:00", "0:00:00", None, True])
+    def test_rejected_forms(self, bare_weconvert, bad):
+        with pytest.raises(SystemExit, match="max_wallclock"):
+            bare_weconvert()._parse_wallclock(bad)
+
+    @pytest.mark.parametrize("writer, propagator", [
+        ("_bng_westcfg", "bng"),
+        ("_libRR_westcfg", "libRoadRunner"),
+        ("_executable_westcfg", "executable"),
+    ])
+    def test_every_west_cfg_uses_it(self, bare_weconvert, tmp_path, monkeypatch, writer, propagator):
+        monkeypatch.chdir(tmp_path)
+        getattr(bare_weconvert(propagator_type=propagator, max_wallclock="720:00:00"), writer)()
+        cfg = (tmp_path / "west.cfg").read_text()
+        assert "max_run_wallclock:    720:00:00" in cfg
+        assert "72:00:00" not in cfg.replace("720:00:00", "")
+
+
+# ---------------------------------------------------------------------------
 # bng lib path resolution (per-platform bundled builds vs. explicit override)
 # ---------------------------------------------------------------------------
 
