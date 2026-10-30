@@ -1,4 +1,5 @@
 import sys, os, json, hashlib
+import numpy as np
 import yaml
 import subprocess as sbpc
 import h5py
@@ -185,7 +186,9 @@ class weAnalysis:
                         produced_at=None, log_path=None):
         """
         Make sure `output` (relative to the analysis folder) exists and was
-        built from `stamp`, running `command` if not.
+        built from `stamp`, running `command` if not. `command` may also be a
+        function returning the command, for commands that are costly to work
+        out (it's only called if the tool actually has to run).
 
         cwd:         where to run the command (default: the analysis folder)
         produced_at: where the tool writes its file, if not directly at
@@ -193,10 +196,12 @@ class weAnalysis:
         log_path:    if given, the tool's output is captured, echoed, and
                      saved here (progress lines ending in "..." are skipped)
         """
+        if os.path.isfile(output) and self.stamp_of(output) == stamp:
+            print("{} is up to date, reusing it".format(output))
+            return
+        if callable(command):
+            command = command()
         if os.path.isfile(output):
-            if self.stamp_of(output) == stamp:
-                print("{} is up to date, reusing it".format(output))
-                return
             print("{} was built from different inputs (or before stamping); "
                   "rebuilding it with {}".format(output, command[0]))
             os.remove(output)
@@ -225,23 +230,78 @@ class weAnalysis:
         with h5py.File(output, "a") as f:
             f.attrs[STAMP_ATTR] = stamp
 
+    def pdist_bin_edges(self):
+        """
+        Histogram bin edges for every pcoord dimension over this analysis's
+        iterations, as w_pdist takes them: at most `bins` bins per dimension.
+
+        A dimension whose values are all whole numbers (molecule counts) gets
+        bins of whole integers, edges on the half-integers: one bin per integer
+        if its range fits in `bins`, otherwise the same number of integers in
+        every bin. Equal-width bins narrower than 1, or not lined up with the
+        integers, would leave some bins with no possible value and others with
+        two, which shows up as a comb or ripple in every distribution.
+
+        Any other dimension gets `bins` equal bins over its range, exactly as
+        w_pdist makes them from a bin count.
+        """
+        lo = hi = whole = None
+        with h5py.File(self.west_path, "r") as f:
+            for n_iter in range(int(self.first_iter), int(self.last_iter) + 1):
+                pc = f["iterations/iter_{:08d}".format(n_iter)]["pcoord"][...]
+                pc = pc.reshape(-1, pc.shape[-1])
+                if pc.size == 0:
+                    continue
+                it_lo, it_hi = pc.min(axis=0), pc.max(axis=0)
+                it_whole = np.all(pc == np.round(pc), axis=0)
+                if lo is None:
+                    lo, hi, whole = it_lo, it_hi, it_whole
+                else:
+                    lo, hi, whole = np.minimum(lo, it_lo), np.maximum(hi, it_hi), whole & it_whole
+        if lo is None:
+            raise RuntimeError("no progress coordinate data in iterations {} to {} of {}".format(
+                self.first_iter, self.last_iter, self.west_path))
+        edges = []
+        for d in range(len(lo)):
+            if whole[d]:
+                first, last = int(round(lo[d])), int(round(hi[d]))
+                n_values = last - first + 1
+                per_bin = -(-n_values // self.bins)           # integers per bin (ceil)
+                n_bins = -(-n_values // per_bin)
+                edges.append([first - 0.5 + per_bin * i for i in range(n_bins + 1)])
+            else:
+                # as w_pdist does: nudge the top edge up so the maximum is inside
+                lb, ub = float(lo[d]), float(hi[d] * 1.01 if hi[d] > 0 else hi[d] / 1.01)
+                if ub <= lb:
+                    lb, ub = lb - 0.5, lb + 0.5
+                edges.append([float(x) for x in np.linspace(lb, ub, self.bins + 1)])
+        return edges
+
+    def pdist_stamp(self):
+        """The stamp of a pdist.h5 built for this analysis. ("binning" names
+        how edges are chosen, so files made the old way, from a plain bin
+        count, are rebuilt instead of reused.)"""
+        return self.stamp("w_pdist", first_iter=int(self.first_iter),
+                          last_iter=int(self.last_iter), bins=self.bins,
+                          binning="whole-integer-aware")
+
     def ensure_pdist(self):
         """
         pdist.h5 for this analysis's iteration range and bins, shared by
         average, evolution, and cluster. Returns it opened read-only. Its
-        histograms cover first_iter..last_iter, in that order.
+        histograms cover first_iter..last_iter, in that order. Bins come from
+        pdist_bin_edges (whole-number pcoords get whole-integer bins).
         """
-        command = [
-            "w_pdist",
-            "-W", self.west_path,
-            "--first-iter", "{}".format(self.first_iter),
-            "--last-iter", "{}".format(self.last_iter),
-            "-o", "pdist.h5",
-            "-b", "{}".format(self.bins),
-        ]
-        stamp = self.stamp("w_pdist", first_iter=int(self.first_iter),
-                           last_iter=int(self.last_iter), bins=self.bins)
-        self.run_westpa_tool("pdist.h5", command, stamp)
+        def command():          # the edges need a pass over west.h5: only if rebuilding
+            return [
+                "w_pdist",
+                "-W", self.west_path,
+                "--first-iter", "{}".format(self.first_iter),
+                "--last-iter", "{}".format(self.last_iter),
+                "-o", "pdist.h5",
+                "-b", json.dumps(self.pdist_bin_edges()),
+            ]
+        self.run_westpa_tool("pdist.h5", command, self.pdist_stamp())
         return h5py.File("pdist.h5", "r")
 
     def ensure_assign(self):

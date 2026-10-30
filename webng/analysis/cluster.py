@@ -51,7 +51,9 @@ class weCluster(weAnalysis):
         colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
         for jj in range(self.dims):
             for ii in range(jj+1,self.dims):
-                label_grid = [[set() for _ in range(self.bins)] for _ in range(self.bins)]
+                # each dimension can have its own number of bins (see pdist_bin_edges)
+                label_grid = [[set() for _ in range(final_cluster_grid.shape[ii])]
+                              for _ in range(final_cluster_grid.shape[jj])]
                 for index in np.ndindex(final_cluster_grid.shape):
                     x_ind = index[jj]
                     y_ind = index[ii]

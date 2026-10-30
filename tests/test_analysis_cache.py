@@ -12,18 +12,21 @@ import sys
 import time
 
 import h5py
+import numpy as np
 import pytest
 
 from webng.analysis.analysis import weAnalysis, STAMP_ATTR
 from conftest import write_west
 
 FAKE_TOOL = """#!{python}
-import os, sys, h5py
+import json, os, sys, h5py
 name = os.path.basename(sys.argv[0])
 with open(os.environ["WEBNG_TEST_CALLS"], "a") as f:
     f.write(name + "\\n")
 with open(os.environ["WEBNG_TEST_CALLS"] + ".cwd", "a") as f:
     f.write(name + " " + os.getcwd() + "\\n")
+with open(os.environ["WEBNG_TEST_CALLS"] + ".args", "a") as f:
+    f.write(json.dumps([name] + sys.argv[1:]) + "\\n")
 if os.environ.get("WEBNG_TEST_FAIL") == name:
     sys.exit(3)
 out = sys.argv[sys.argv.index("-o") + 1] if "-o" in sys.argv else "direct.h5"
@@ -48,7 +51,7 @@ def sim(tmp_path, monkeypatch):
 
     sim_dir = tmp_path / "sim"
     (sim_dir / "analysis").mkdir(parents=True)
-    write_west(sim_dir, 101)
+    write_west(sim_dir, 101, ndim=1)
     monkeypatch.chdir(sim_dir / "analysis")
 
     an = weAnalysis.__new__(weAnalysis)
@@ -85,7 +88,8 @@ def test_changed_settings_rebuild(sim, change):
     _, an, take_calls = sim
     an.ensure_pdist().close()
     take_calls()
-    setattr(an, change, getattr(an, change) + 7)
+    # (last_iter moves down: the run only has 100 finished iterations)
+    setattr(an, change, getattr(an, change) + (-7 if change == "last_iter" else 7))
     an.ensure_pdist().close()
     assert take_calls() == ["w_pdist"]
 
@@ -94,11 +98,11 @@ def test_continued_or_replaced_run_rebuilds(sim):
     sim_dir, an, take_calls = sim
     an.ensure_pdist().close()
     take_calls()
-    write_west(sim_dir, 160)                    # run continued
+    write_west(sim_dir, 160, ndim=1)            # run continued
     an.ensure_pdist().close()
     assert take_calls() == ["w_pdist"]
     time.sleep(0.01)
-    write_west(sim_dir, 160, padding=50)        # different run, same iteration count
+    write_west(sim_dir, 160, ndim=1, padding=50)   # different run, same iteration count
     an.ensure_pdist().close()
     assert take_calls() == ["w_pdist"]
 
@@ -237,3 +241,76 @@ def test_pcoord_names_fall_back_to_analysis_options(tmp_path, monkeypatch):
 def test_pcoord_name_count_mismatch_labels_by_number(tmp_path, monkeypatch):
     _named_sim(tmp_path, 3)
     assert _names(tmp_path, monkeypatch, ["Atot", "Btot"]) == ["0", "1", "2"]
+
+# ---------------------------------------------------------------------------
+# histogram bins (pdist_bin_edges)
+# ---------------------------------------------------------------------------
+
+def _binned(tmp_path, values, bins):
+    """
+    weAnalysis over a sim whose pcoord takes `values` (array, shape
+    (n, ndim)), spread over 3 iterations; returns (analysis, edges).
+    """
+    values = np.asarray(values, dtype=np.float32)
+    chunks = np.array_split(values, 3)
+    write_west(tmp_path / "s", 4, ndim=values.shape[1],
+               pcoord=lambda n: np.repeat(chunks[n - 1][:, None, :], 2, axis=1))
+    an = weAnalysis.__new__(weAnalysis)
+    an.sim_path, an.west_path = str(tmp_path / "s"), str(tmp_path / "s" / "west.h5")
+    an.first_iter, an.last_iter, an.bins = 1, 3, bins
+    return an, an.pdist_bin_edges()
+
+
+def test_whole_number_pcoords_get_one_bin_per_integer(tmp_path):
+    """Counts 0..52 with 100 bins asked for: 53 bins, one per count, none empty
+    (equal-width bins of ~0.5 left every other bin empty: the comb artifact)."""
+    counts = np.column_stack([np.arange(53), np.arange(53) % 51])
+    _, edges = _binned(tmp_path, counts, bins=100)
+    assert edges[0] == [v - 0.5 for v in range(54)]
+    assert edges[1] == [v - 0.5 for v in range(52)]
+    for d in range(2):
+        filled, _ = np.histogram(counts[:, d], bins=edges[d])
+        assert (filled > 0).all()
+
+
+def test_wide_integer_range_groups_whole_integers(tmp_path):
+    """Counts 0..3999 with 100 bins: 40 integers in every bin, all equally filled."""
+    counts = np.arange(4000)[:, None]
+    _, edges = _binned(tmp_path, counts, bins=100)
+    assert len(edges[0]) == 101
+    assert np.allclose(np.diff(edges[0]), 40) and edges[0][0] == -0.5
+    filled, _ = np.histogram(counts[:, 0], bins=edges[0])
+    assert (filled == 40).all()
+
+
+def test_integer_range_not_starting_at_zero(tmp_path):
+    counts = np.arange(50, 61)[:, None]                # a gene that never drops below 50
+    _, edges = _binned(tmp_path, counts, bins=30)
+    assert edges[0] == [v - 0.5 for v in range(50, 62)]
+
+
+def test_non_integer_pcoords_bin_as_w_pdist_would(tmp_path):
+    values = np.linspace(0.25, 7.75, 60)[:, None]
+    _, edges = _binned(tmp_path, values, bins=30)
+    lo, hi = float(np.float32(0.25)), float(np.float32(7.75))
+    assert edges[0] == pytest.approx(list(np.linspace(lo, hi * 1.01, 31)))
+
+
+def test_each_dimension_is_binned_on_its_own(tmp_path):
+    mixed = np.column_stack([np.arange(20), np.linspace(0.1, 2.0, 20)])
+    _, edges = _binned(tmp_path, mixed, bins=10)
+    assert np.allclose(np.diff(edges[0]), 2) and edges[0][0] == -0.5     # whole integers, 2 per bin
+    assert len(edges[1]) == 11 and edges[1][0] == pytest.approx(0.1)     # 10 equal bins
+
+
+def test_pdist_gets_the_edges_and_old_style_files_rebuild(sim):
+    """w_pdist is handed explicit edges; a pdist.h5 stamped by the old
+    plain-bin-count method is rebuilt rather than reused."""
+    _, an, take_calls = sim
+    with h5py.File("pdist.h5", "w") as f:              # made before integer-aware bins
+        f.attrs[STAMP_ATTR] = an.stamp("w_pdist", first_iter=1, last_iter=100, bins=30)
+    an.ensure_pdist().close()
+    assert take_calls() == ["w_pdist"]
+    args = [json.loads(l) for l in open(os.environ["WEBNG_TEST_CALLS"] + ".args")]
+    pdist_args = [a for a in args if a[0] == "w_pdist"][-1]
+    assert json.loads(pdist_args[pdist_args.index("-b") + 1]) == [[-0.5, 0.5]]   # all-zero pcoord

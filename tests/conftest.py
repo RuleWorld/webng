@@ -199,17 +199,23 @@ CI_DTYPE = np.dtype([("iter_start", np.uint32), ("iter_stop", np.uint32),
                      ("corr_len", np.uint32)])
 
 
-def write_west(sim_dir, current_iteration, ndim=None, padding=0):
+def write_west(sim_dir, current_iteration, ndim=None, padding=0, pcoord=None):
     """
-    A minimal west.h5 in `sim_dir`: just the current-iteration attribute,
-    plus (if `ndim`) an iteration-1 pcoord with that many dimensions, plus
-    (if `padding`) some extra data, which changes the file's size.
+    A minimal west.h5 in `sim_dir`: the current-iteration attribute, plus
+    (if `ndim`) a pcoord with that many dimensions for every finished
+    iteration (1 to current_iteration - 1, at least one), plus (if `padding`)
+    some extra data, which changes the file's size.
+
+    pcoord(n_iter) -> array of shape (segments, timepoints, ndim) supplies the
+    values; by default each iteration is all zeros, shape (2, 3, ndim).
     """
     os.makedirs(sim_dir, exist_ok=True)
     with h5py.File(os.path.join(sim_dir, "west.h5"), "w") as f:
         f.attrs["west_current_iteration"] = current_iteration
         if ndim is not None:
-            f.create_dataset("iterations/iter_00000001/pcoord", data=np.zeros((2, 3, ndim)))
+            for n_iter in range(1, max(2, current_iteration)):
+                data = pcoord(n_iter) if pcoord is not None else np.zeros((2, 3, ndim))
+                f.create_dataset("iterations/iter_{:08d}/pcoord".format(n_iter), data=data)
         if padding:
             f["padding"] = list(range(padding))
 

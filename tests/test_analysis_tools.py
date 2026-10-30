@@ -35,7 +35,7 @@ def test_cluster_writes_one_state_per_dense_region(analysis_sim):
     hist[7:9, 6:9] = 1.0                       # region 2: 2x3 bins, far away
     mid_a, mid_b = np.arange(10) + 0.5, (np.arange(10) + 0.5) * 10
     # cwd is now the analysis folder (weAnalysis.__init__ moved there)
-    write_stamped("pdist.h5", c.stamp("w_pdist", first_iter=c.first_iter, last_iter=c.last_iter, bins=c.bins),
+    write_stamped("pdist.h5", c.pdist_stamp(),
              histograms=np.stack([hist, hist]), midpoints_0=mid_a, midpoints_1=mid_b)
     c.run()
 
@@ -51,6 +51,26 @@ def test_cluster_writes_one_state_per_dense_region(analysis_sim):
         sorted((mid_a[i], mid_b[j]) for i in (7, 8) for j in (6, 7, 8)),
     ])
     assert found == expected
+
+
+def test_cluster_handles_dimensions_with_different_bin_counts(analysis_sim):
+    """With whole-integer bins each dimension has its own bin count: here 14 x 6
+    with `bins` set to 10 (the old grid was bins x bins and overflowed)."""
+    sim = analysis_sim()
+    c = weCluster({"sim_name": "sim", "work-path": None, "pcoords": ["A", "B"],
+                   "bins": 10, "threshold": 90, "min-samples": 2, "eps": 1.5,
+                   "first-iter": None, "last-iter": None})
+    hist = np.zeros((14, 6))
+    hist[11:13, 3:5] = 1.0
+    hist[1:3, 0:2] = 1.0
+    write_stamped("pdist.h5", c.pdist_stamp(), histograms=np.stack([hist, hist]),
+                  midpoints_0=np.arange(14.0), midpoints_1=np.arange(6.0))
+    c.run()
+    with open(sim / "analysis" / "states.yaml") as f:
+        states = yaml.safe_load(f)["states"]
+    found = sorted(sorted(map(tuple, s["coords"])) for s in states)
+    assert found == sorted([sorted((float(i), float(j)) for i in (1, 2) for j in (0, 1)),
+                            sorted((float(i), float(j)) for i in (11, 12) for j in (3, 4))])
 
 
 # ---------------------------------------------------------------------------
