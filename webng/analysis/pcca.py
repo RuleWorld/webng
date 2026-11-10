@@ -133,40 +133,40 @@ class wePCCA(weAnalysis):
         Reads the final iteration's Voronoi bin mapper out of a west.h5
         and returns its bin centers.
         """
+        # the latest iteration's mapper: the one w_assign bins with
         with h5py.File(west_h5_path, "r") as f:
-            iters = sorted(f["iterations"].keys())
-            last_iter_key = iters[-1]
-            binhash = f["iterations/{}".format(last_iter_key)].attrs["binhash"]
-            index = f["bin_topologies/index"][()]
-            idx = None
-            for i, entry in enumerate(index):
-                if entry["hash"].decode("ascii").rstrip("\x00") == binhash:
-                    idx = i
-                    break
-            if idx is None:
-                raise ValueError("binhash not found in {}".format(west_h5_path))
-            pickle_len = index[idx]["pickle_len"]
-            mapper_bytes = f["bin_topologies/pickles"][idx, :pickle_len].tobytes()
-            mapper = pickle.loads(mapper_bytes)
-            return np.array(mapper.centers, dtype=np.float32)
+            last_iter = int(sorted(f["iterations"].keys())[-1][len("iter_"):])
+        mapper = self.load_run_mapper(last_iter, west_path=west_h5_path)
+        if not hasattr(mapper, "centers"):
+            raise ValueError("pcca needs adaptive (Voronoi) binning, but {} used {}".format(
+                west_h5_path, type(mapper).__name__))
+        return np.array(mapper.centers, dtype=np.float32)
 
-    def build_transition_matrix(self, tmat_h5, first_iter=None, last_iter=None):
+    def build_transition_matrix(self, tmat_h5, first_iter=None, last_iter=None, nstates=None):
         """
-        Builds the averaged, row-normalized per-bin transition matrix
-        from a w_reweight tmat.h5. Ported as-is from pcca_master.py.
+        Builds the averaged, row-normalized per-bin transition matrix from a
+        w_reweight tmat.h5.
+
+        w_reweight's matrix is "history-augmented": each bin is split by the
+        state the walker last visited, so it has nbins * nstates rows, row r
+        being bin r // nstates with last-visited state r % nstates (WESTPA's
+        bin_state_map / bin_last_state_map). Summing each bin's `nstates`
+        consecutive rows and columns gives the plain bin-to-bin matrix.
+        `nstates` is the number of states in assign.h5 (its "nstates"
+        attribute), not a fixed 2: that only held for two-state analyses.
         """
+        if nstates is None or int(nstates) < 1:
+            raise ValueError("build_transition_matrix needs nstates, the number of "
+                             "states in assign.h5")
+        nstates = int(nstates)
         with h5py.File(tmat_h5, "r") as tmh5:
-            nrows = tmh5.attrs["nrows"]
-            ncols = tmh5.attrs["ncols"]
+            nrows = int(tmh5.attrs["nrows"])
+            ncols = int(tmh5.attrs["ncols"])
             iter_start = tmh5.attrs["iter_start"] if first_iter is None else first_iter
             iter_stop = tmh5.attrs["iter_stop"] if last_iter is None else last_iter
-            # NOTE: this "2" is NOT the number of macrostates -- it's
-            # w_reweight's own internal row/col doubling convention in
-            # its flux-matrix format, unrelated to states.yaml or
-            # n_clusters. Do not confuse this with n_clusters; changing
-            # it would misparse the HDF5 layout, not change how many
-            # macrostates you get.
-            nstates = 2
+            if nrows % nstates or ncols != nrows:
+                raise ValueError("{} is {} x {}, which isn't (bins x {} states) square"
+                                 .format(tmat_h5, nrows, ncols, nstates))
             nbins = nrows // nstates
 
             tm_sum = None
@@ -180,15 +180,10 @@ class wePCCA(weAnalysis):
                 col = tmh5["iterations"][it_str]["cols"][:]
                 row = tmh5["iterations"][it_str]["rows"][:]
                 flux = tmh5["iterations"][it_str]["flux"][:]
-                ctm = coo_matrix((flux, (row, col)), shape=(nrows, ncols)).toarray()
-
-                tm_i = np.zeros((nbins, nbins), dtype=np.float64)
-                for bi in range(nbins):
-                    for bj in range(nbins):
-                        tm_i[bi, bj] = ctm[
-                            bi * nstates : (bi + 1) * nstates,
-                            bj * nstates : (bj + 1) * nstates,
-                        ].sum()
+                # each flux entry, moved from its (bin, last state) row/column
+                # to its bin; duplicates are summed when densified
+                tm_i = coo_matrix((flux, (row // nstates, col // nstates)),
+                                  shape=(nbins, nbins)).toarray()
 
                 all_iter_tms[i] = tm_i
                 tm_sum = tm_i.copy() if tm_sum is None else tm_sum + tm_i
@@ -685,17 +680,17 @@ class wePCCA(weAnalysis):
         }, lines
 
     def run(self):
-        assign_h5 = "assign.h5"
         tmat_h5 = "tmat.h5"
 
         assign_stamp = self.ensure_assign()
+        assign_h5 = self.assign_path        # assign.h5 here, or the assign-h5 file
 
         # runs from the sim folder (w_reweight needs its west.cfg)
         command = [
             "w_reweight",
             "init",
             "-W", self.west_path,
-            "-a", os.path.abspath(assign_h5),
+            "-a", assign_h5,
             "-o", os.path.abspath(tmat_h5),
         ]
         self.run_westpa_tool(tmat_h5, command,
@@ -703,9 +698,14 @@ class wePCCA(weAnalysis):
                              cwd=self.sim_path)
 
         print("Building transition matrix...")
+        with h5py.File(assign_h5, "r") as af:
+            nstates, assigned_bins = int(af.attrs["nstates"]), int(af.attrs["nbins"])
         tm_norm, all_iter_tms, nbins = self.build_transition_matrix(
-            tmat_h5, self.first_iter, self.last_iter
+            tmat_h5, self.first_iter, self.last_iter, nstates=nstates
         )
+        if nbins != assigned_bins:
+            raise RuntimeError("tmat.h5 has {} bins but assign.h5 has {}; were they made "
+                               "from the same assignments?".format(nbins, assigned_bins))
 
         print("Loading Voronoi bin centers...")
         centers = self.load_final_centers(self.movement_h5_path)

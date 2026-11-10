@@ -1,8 +1,9 @@
-import sys, os, json, hashlib
+import sys, os, json, hashlib, time
 import numpy as np
 import yaml
 import subprocess as sbpc
 import h5py
+import webng.analysis.utils as utils
 
 
 # Root attribute stamped onto every file a WESTPA tool builds for an analysis,
@@ -35,6 +36,14 @@ class weAnalysis:
         if not os.path.isdir(self.work_path):
             os.mkdir(self.work_path)
         self.curr_path = os.getcwd()
+        # worker processes for WESTPA's tools (None: WESTPA's own default)
+        self.n_workers = opts.get("n-workers")
+        if self.n_workers is not None and (not isinstance(self.n_workers, int) or self.n_workers < 1):
+            sys.exit("analyses: n-workers must be a whole number of at least 1, got {!r}".format(self.n_workers))
+        # an existing assign.h5 to use as-is (path relative to where webng runs)
+        provided = opts.get("assign-h5")
+        self.provided_assign = os.path.abspath(provided) if provided else None
+        self.assign_path = None        # set by ensure_assign
         os.chdir(self.work_path)
         # Set names if we have them
         self.set_names(opts["pcoords"])
@@ -148,18 +157,29 @@ class weAnalysis:
     def stamp(self, tool, **settings):
         """
         A string describing what an output was built from: which WESTPA tool,
-        the identity of west.h5 (its current iteration, size, and modification
-        time, so a continued, replaced, or different run all change it), and
-        any settings that affect the result (iteration range, bins, ...).
+        the identity of west.h5, and any settings that affect the result
+        (iteration range, bins, ...).
+
+        west.h5's identity is its current iteration, its size, and a
+        fingerprint of the last finished iteration's walker records
+        (seg_index: weights, parents, ...), so a continued, replaced, or
+        different run all change it. Deliberately not its modification time,
+        which changes without the run changing: copying the file, or a tool
+        opening it writable (w_assign does) would make every cached output
+        look stale.
         """
-        st = os.stat(self.west_path)
         with h5py.File(self.west_path, "r") as f:
             current = int(f.attrs["west_current_iteration"])
+            last = "iterations/iter_{:08d}".format(current - 1)
+            fingerprint = None
+            if current > 1 and last in f and "seg_index" in f[last]:
+                records = np.ascontiguousarray(f[last]["seg_index"][...])
+                fingerprint = hashlib.sha256(records.tobytes()).hexdigest()
         built_from = {
             "tool": tool,
             "west_current_iteration": current,
-            "west_size": st.st_size,
-            "west_mtime_ns": st.st_mtime_ns,
+            "west_size": os.path.getsize(self.west_path),
+            "west_last_iteration": fingerprint,
         }
         built_from.update(settings)
         return json.dumps(built_from, sort_keys=True, default=str)
@@ -169,6 +189,18 @@ class weAnalysis:
         """Content hash of a small input file (e.g. states.yaml)."""
         with open(path, "rb") as f:
             return hashlib.sha256(f.read()).hexdigest()
+
+    @staticmethod
+    def _stamp_changes(old, new):
+        """What differs between two stamps, for the rebuild message."""
+        if old is None:
+            return "it has no stamp: made by an older WEBNG"
+        try:
+            old, new = json.loads(old), json.loads(new)
+        except ValueError:
+            return "unreadable stamp"
+        changed = sorted(k for k in set(old) | set(new) if old.get(k) != new.get(k))
+        return "changed: " + ", ".join(changed)
 
     @staticmethod
     def stamp_of(path):
@@ -199,11 +231,19 @@ class weAnalysis:
         if os.path.isfile(output) and self.stamp_of(output) == stamp:
             print("{} is up to date, reusing it".format(output))
             return
+        if os.path.isfile(output) and self.stamp_of(output) is None:
+            # not made by WEBNG (or by one from before stamping): it may have
+            # taken hours to make, so never delete it on a guess
+            raise RuntimeError(
+                "{} in {} wasn't made by WEBNG (it has no WEBNG stamp), so WEBNG won't "
+                "delete it. Delete it yourself to have WEBNG rebuild it; for an "
+                "assign.h5 you made yourself, set analyses: assign-h5 to its path "
+                "to use it as-is.".format(output, os.getcwd()))
         if callable(command):
             command = command()
         if os.path.isfile(output):
-            print("{} was built from different inputs (or before stamping); "
-                  "rebuilding it with {}".format(output, command[0]))
+            print("{} was built from different inputs ({}); rebuilding it with {}".format(
+                output, self._stamp_changes(self.stamp_of(output), stamp), command[0]))
             os.remove(output)
         else:
             print("{} does not exist. Running {}".format(output, command[0]))
@@ -230,6 +270,14 @@ class weAnalysis:
         with h5py.File(output, "a") as f:
             f.attrs[STAMP_ATTR] = stamp
 
+    def load_run_mapper(self, n_iter=None, west_path=None):
+        """
+        The bin mapper this run used at iteration `n_iter` (default: its last
+        finished iteration), from `west_path` (default: this analysis's
+        west.h5). See webng.analysis.utils.load_mapper.
+        """
+        return utils.load_mapper(west_path or self.west_path, self.sim_path, n_iter)
+
     def pdist_bin_edges(self):
         """
         Histogram bin edges for every pcoord dimension over this analysis's
@@ -246,8 +294,18 @@ class weAnalysis:
         w_pdist makes them from a bin count.
         """
         lo = hi = whole = None
+        first, last = int(self.first_iter), int(self.last_iter)
+        n_total = last - first + 1
+        report_every = max(1, n_total // 10)
+        print("Scanning progress coordinates in iterations {}-{} to choose histogram "
+              "bins...".format(first, last), flush=True)
+        started = time.time()
         with h5py.File(self.west_path, "r") as f:
-            for n_iter in range(int(self.first_iter), int(self.last_iter) + 1):
+            for n_iter in range(first, last + 1):
+                done = n_iter - first + 1
+                if done % report_every == 0 or done == n_total:
+                    print("  {}/{} iterations ({:.0f} s)".format(
+                        done, n_total, time.time() - started), flush=True)
                 pc = f["iterations/iter_{:08d}".format(n_iter)]["pcoord"][...]
                 pc = pc.reshape(-1, pc.shape[-1])
                 if pc.size == 0:
@@ -300,22 +358,53 @@ class weAnalysis:
                 "--last-iter", "{}".format(self.last_iter),
                 "-o", "pdist.h5",
                 "-b", json.dumps(self.pdist_bin_edges()),
-            ]
+            ] + self.work_manager_args()
         self.run_westpa_tool("pdist.h5", command, self.pdist_stamp())
         return h5py.File("pdist.h5", "r")
 
     def ensure_assign(self):
         """
         assign.h5 from states.yaml, shared by network and pcca. Returns its
-        stamp, which outputs built from it include in their own.
+        stamp, which outputs built from it include in their own, and sets
+        self.assign_path to the file to use.
+
+        With the assign-h5 option, that existing file is used as-is and never
+        rebuilt (e.g. assignments made with your own bins); its stamp then
+        records which file it was and its contents' fingerprint, so outputs
+        built from it are rebuilt if it's replaced.
         """
+        if self.provided_assign is not None:
+            path = self.provided_assign
+            if not os.path.isfile(path):
+                raise RuntimeError("assign-h5: {} does not exist".format(path))
+            with h5py.File(path, "r") as f:
+                if "state_map" not in f:
+                    raise RuntimeError("assign-h5: {} has no state_map; is it w_assign "
+                                       "output made with states?".format(path))
+                fingerprint = hashlib.sha256()
+                for name in ("state_map", "state_labels"):
+                    if name in f:
+                        fingerprint.update(np.ascontiguousarray(f[name][...]).tobytes())
+            print("Using {} as-is (analyses: assign-h5); WEBNG won't rebuild it".format(path))
+            self.assign_path = path
+            return self.stamp("provided assign.h5", path=path, size=os.path.getsize(path),
+                              contents=fingerprint.hexdigest())
+
         # runs from the sim folder (w_assign needs its west.cfg / system.py)
+        self.assign_path = os.path.abspath("assign.h5")
         command = [
             "w_assign",
             "-W", self.west_path,
             "--states-from-file", os.path.abspath("states.yaml"),
-            "-o", os.path.abspath("assign.h5"),
-        ]
+            "-o", self.assign_path,
+        ] + self.work_manager_args()
         stamp = self.stamp("w_assign", states_yaml=self.file_digest("states.yaml"))
         self.run_westpa_tool("assign.h5", command, stamp, cwd=self.sim_path)
         return stamp
+
+    def work_manager_args(self):
+        """WESTPA work-manager options for parallel tools (w_pdist, w_assign):
+        n-workers worker processes, or nothing (WESTPA's default) if unset."""
+        if self.n_workers is None:
+            return []
+        return ["--work-manager", "processes", "--n-workers", str(self.n_workers)]

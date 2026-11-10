@@ -1,198 +1,58 @@
-import sys, os
-import numpy as np
-import pickle, sys
+"""
+Helpers shared by WEBNG's analysis tools:
+
+  load_mapper   the bin mapper a run stored in its west.h5 (used by average
+                and pcca, through weAnalysis.load_run_mapper)
+  voronoi       Voronoi cell edges for drawing adaptive bins (average)
+"""
+import os
+import pickle
+
+import h5py
 import matplotlib
-import matplotlib.pyplot as plt
-from westpa.core.binning import NopMapper
-
-index_dtype = np.uint16
+import matplotlib.tri
+import numpy as np
 
 
-class wrapped_clusterer(NopMapper):
-    def __init__(self, clusterer):
-        super(NopMapper, self).__init__()
-        self.predictor = clusterer
-        self.labels = [0, 1, 2, 3]
-        self.nbins = 4
-
-    def assign(self, coords, mask=None, output=None):
-        assigned = np.array(self.predictor.predict(coords), dtype=index_dtype)
-        try:
-            output[...] = assigned[...]
-        except:
-            pass
-
-        return assigned
-
-
-def pull_data(n_iter, iter_group):
+def load_mapper(west_path, sim_path, n_iter=None):
     """
-    This function reshapes the progress coordinate and
-    auxiliary data for each iteration and retuns it to
-    the tool.
+    The bin mapper a run used at iteration `n_iter` (default: its last
+    finished iteration), as WESTPA stored it in west.h5 (bin_topologies),
+    falling back to the iteration before if none was stored there.
+
+    A stored mapper refers to classes and functions in the sim's system.py,
+    so unpickling imports system.py (the sim folder must be on sys.path, as
+    weAnalysis arranges). That's done from inside `sim_path`, where WESTPA
+    always runs system.py, so relative paths in it (say, a file of bin
+    centers opened at import) resolve exactly as during the simulation.
+    System.initialize() is never called.
     """
-    data_to_pull = np.loadtxt("data_to_pull.txt") - 1
-    d1, d2 = data_to_pull
-    pcoord = iter_group["pcoord"][:, :, [d1, d2]]
-
-    data = pcoord
-
-    return data
-
-
-def pull_all_data(n_iter, iter_group):
-    """
-    This function reshapes the progress coordinate and
-    auxiliary data for each iteration and retuns it to
-    the tool.
-    """
-    pcoord = iter_group["pcoord"][:, :, :]
-
-    data = pcoord
-
-    return data
-
-
-def avg(hist, midpoints, binbounds):
-
-    # First we are going to import the pyplot library
-    # to get access to the matplotlib object so we can
-    # further modify it.
-    import matplotlib.pyplot as plt
-
-    # Now we are going to change the title, add axis labels
-    plt.xlabel("Protein A concentration")
-    plt.ylabel("Protein B concentration")
-    plt.xlim((0, 30))
-    plt.ylim((0, 30))
-
-
-def assign_cluster():
-    print("making the wrapped clusterer")
-    WClusterer = wrapped_clusterer(clusterer)
-    return WClusterer
-
-
-def load_mapper(h, iter_no):
-    parent_dir = os.path.abspath(os.path.join(os.getcwd(), ".."))
-    sys.path.append(parent_dir)
-
-    import pickle
-    import system
-
-    topol_grp = h["bin_topologies"]
-    hashval = h["iterations/iter_{:08d}".format(iter_no)].attrs["binhash"]
-    hashval = bytes(hashval, "utf-8")
-    index = topol_grp["index"]
-    pickles = topol_grp["pickles"]
-    n_entries = len(index)
-
-    chunksize = 256
-    istart = iter_no - 1
-    for istart in range(0, n_entries, chunksize):
-        chunk = index[istart : min(istart + chunksize, n_entries)]
-        for i in range(len(chunk)):
-            if chunk[i]["hash"] == hashval:
-                pkldat = bytes(pickles[istart + i, 0 : chunk[i]["pickle_len"]].data)
-                mapper = pickle.loads(pkldat)
-    return mapper
-
-
-def assign_voronoi():
-    print("Pulling the latest bin mapper")
-    import h5py
-
-    h = h5py.File("west.h5", "r")
-    i = h.attrs["west_current_iteration"] - 1
-    mapper = load_mapper(h, i)
-    return mapper
-
-
-def assign_pcca():
-    print("making the wrapped clusterer")
-    import h5py
-
-    h = h5py.File("west.h5", "r")
-    i = h.attrs["west_current_iteration"] - 1
-    mapper = load_mapper(h, i)
-    WClusterer = wrapped_mapper(mapper)
-    WClusterer.load_pcca_labels(
-        "/home/monoid/PROJECTS/PLURI_12GENE/001/analysis/metasble_assignments.pkl"
-    )
-    return WClusterer
-
-
-# def assign_halton():
-#     import matplotlib.pyplot as plt
-#     import ghalton as gh
-#     print("getting halton centers")
-#     import h5py
-#     h = h5py.File('west.h5','r')
-#     i = h.attrs['west_current_iteration']
-#     mapper = load_mapper(h, i)
-#     seq = gh.Halton(mapper.centers.shape[1])
-#     s = np.array(seq.get(mapper.centers.shape[0]))
-#     for i in range(mapper.centers.shape[1]):
-#         s[:,i] = s[:,i] * (mapper.centers[:,i].max())
-#     np.save("halton_centers.npy", s)
-#     # done plotting
-#     mapper.centers = s
-#     return mapper
-
-
-class wrapped_mapper(NopMapper):
-    def __init__(self, mapper):
-        super(NopMapper, self).__init__()
-        self.underlying_mapper = mapper
-        self.labels = mapper.labels
-        self.nbins = mapper.nbins
-
-    def load_pcca_labels(self, label_file):
-        f = open(label_file, "r")
-        self.pcca_labels = np.array([0] + list(pickle.load(f)))
-        f.close()
-
-    def assign(self, coords, mask=None, output=None):
-        # print("In .assign")
-        # print("coordinates")
-        # print(coords, coords.shape)
-
-        assigned = self.underlying_mapper.assign(coords)
-        # print("shape of coords to remap")
-        # print(assigned.shape)
-        remapped = np.array(map(lambda x: self.pcca_labels[x], assigned))
-        try:
-            output[...] = remapped[...]
-            # print(output, output.shape)
-        except:
-            pass
-        # print("assigned")
-        # print(assigned, assigned.shape)
-
-        return remapped
-
-
-def pull_weight(n_iter, iter_group):
-    """
-    Custom weight puller for a custom version of w_pdist.
-    This will probably eventually make it into the main repo
-    """
-    # import sys, h5py
-    # import numpy as np
-    #
-    ## Let's pull in the parent we want
-    # parent = np.loadtxt('parent_to_track.txt')
-    # parent_file = h5py.File('root_parents.h5', 'r')
-    # parents = parent_file['iter_%08d/parents'%n_iter]
-    # weights_to_get = (parents == parent)
-    ## Get the weights
-    # weights = iter_group['seg_index']['weight'][...]
-    ## everything else is 0
-    # data = np.zeros(weights.shape)
-    # data[weights_to_get] = weights[weights_to_get]
-    ## normalize
-    # data = data/sum(data)
-    return iter_group["seg_index"]["weight"][...]
+    with h5py.File(west_path, "r") as f:
+        if n_iter is None:
+            n_iter = int(f.attrs["west_current_iteration"]) - 1
+        index = f["bin_topologies/index"][...]
+        data = None
+        for it in (n_iter, n_iter - 1):
+            group = "iterations/iter_{:08d}".format(it)
+            if it < 1 or group not in f or "binhash" not in f[group].attrs:
+                continue
+            binhash = f[group].attrs["binhash"]
+            if isinstance(binhash, str):
+                binhash = binhash.encode("utf-8")
+            rows = [r for r, entry in enumerate(index)
+                    if bytes(entry["hash"]).rstrip(b"\0") == binhash.rstrip(b"\0")]
+            if rows:
+                length = int(index[rows[0]]["pickle_len"])
+                data = np.asarray(f["bin_topologies/pickles"][rows[0], :length]).tobytes()
+                break
+        if data is None:
+            raise ValueError("no stored bin mapper for iteration {} in {}".format(n_iter, west_path))
+    here = os.getcwd()
+    os.chdir(sim_path)
+    try:
+        return pickle.loads(data)
+    finally:
+        os.chdir(here)
 
 
 # Next two functions by:

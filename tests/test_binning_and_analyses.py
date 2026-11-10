@@ -111,12 +111,14 @@ def build_sim():
         _remove(style)
 
 
-def _run_analyses(yaml_path, enable, settings=None):
-    """Turn on exactly `enable`, apply per-tool `settings`, run `webng analysis`."""
+def _run_analyses(yaml_path, enable, settings=None, shared=None):
+    """Turn on exactly `enable`, apply per-tool `settings` and `shared`
+    analyses-level options, run `webng analysis`."""
     with open(yaml_path) as f:
         opts = yaml.safe_load(f)
     an = opts["analyses"]
     an["enabled"] = True
+    an.update(shared or {})
     for name in ANALYSES:
         an[name]["enabled"] = name in enable
     for name, extra in (settings or {}).items():
@@ -185,6 +187,7 @@ def test_network_pcca_and_voronoi_boundaries(build_sim):
         settings={"average": {"plot-boundaries": True},
                   "network": {"step-iter": 1},
                   "pcca": {"step-iter": 1}},
+        shared={"n-workers": 2},     # real w_pdist and w_assign with worker processes
     )
     _assert_outputs(sim, "average.png", "assign.h5", "direct.h5", "tmat.h5",
                     "output_pcca.txt", "mfpt_evolution.png", "voronoi_states.png")

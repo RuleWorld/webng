@@ -4,7 +4,6 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import itertools as itt
-import webng.analysis.utils as utils
 from webng.analysis.analysis import weAnalysis
 
 # Hacky way to disable warnings so we can focus on important stuff

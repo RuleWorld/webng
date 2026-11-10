@@ -8,6 +8,7 @@ each call, so these run fast and don't need a real simulation.
 """
 import json
 import os
+import shutil
 import sys
 import time
 
@@ -57,6 +58,7 @@ def sim(tmp_path, monkeypatch):
     an = weAnalysis.__new__(weAnalysis)
     an.sim_path, an.west_path = str(sim_dir), str(sim_dir / "west.h5")
     an.first_iter, an.last_iter, an.bins = 1, 100, 30
+    an.n_workers, an.provided_assign = None, None
 
     def take_calls():
         names = calls.read_text().split() if calls.exists() else []
@@ -107,11 +109,55 @@ def test_continued_or_replaced_run_rebuilds(sim):
     assert take_calls() == ["w_pdist"]
 
 
-def test_unstamped_old_file_rebuilds(sim):
-    _, an, take_calls = sim
-    h5py.File("pdist.h5", "w").close()          # e.g. made before stamping existed
+def test_copying_or_touching_west_h5_does_not_rebuild(sim):
+    """Only a changed run should invalidate outputs, not a new modification time
+    (a copy, or a tool opening west.h5 writable)."""
+    sim_dir, an, take_calls = sim
+    an.ensure_pdist().close()
+    take_calls()
+    west = sim_dir / "west.h5"
+    os.utime(west, (time.time() + 1000, time.time() + 1000))       # touched
+    shutil.copyfile(west, sim_dir / "copy.h5")
+    shutil.copyfile(sim_dir / "copy.h5", west)                      # copied back: new mtime
+    an.ensure_pdist().close()
+    assert take_calls() == []
+
+
+def test_replaced_run_with_same_size_rebuilds(sim):
+    """Same iteration count, same file size, different walkers: a different run."""
+    sim_dir, an, take_calls = sim
+    records = np.zeros(4, dtype=[("weight", "f8"), ("parent_id", "i8")])
+    records["weight"] = 0.25
+    write_west(sim_dir, 101, ndim=1, seg_index=records)
+    an.ensure_pdist().close()
+    take_calls()
+    size = os.path.getsize(sim_dir / "west.h5")
+    records["weight"] = [0.1, 0.2, 0.3, 0.4]
+    write_west(sim_dir, 101, ndim=1, seg_index=records)
+    assert os.path.getsize(sim_dir / "west.h5") == size          # size alone can't tell them apart
     an.ensure_pdist().close()
     assert take_calls() == ["w_pdist"]
+
+
+def test_rebuild_message_names_what_changed(sim, capsys):
+    sim_dir, an, take_calls = sim
+    an.ensure_pdist().close()
+    write_west(sim_dir, 160, ndim=1)
+    an.ensure_pdist().close()
+    assert "changed: west_current_iteration" in capsys.readouterr().out
+
+
+def test_unstamped_file_is_never_deleted(sim):
+    """A file WEBNG didn't make (say, a 4-hour w_assign run by hand) may be
+    irreplaceable: stop with instructions instead of deleting it."""
+    _, an, take_calls = sim
+    with h5py.File("pdist.h5", "w") as f:       # made outside WEBNG
+        f["data"] = [1, 2, 3]
+    with pytest.raises(RuntimeError, match="wasn't made by WEBNG"):
+        an.ensure_pdist()
+    assert take_calls() == []
+    with h5py.File("pdist.h5", "r") as f:
+        assert list(f["data"][...]) == [1, 2, 3]
 
 
 def test_failing_tool_raises_then_reruns(sim, monkeypatch):
@@ -314,3 +360,63 @@ def test_pdist_gets_the_edges_and_old_style_files_rebuild(sim):
     args = [json.loads(l) for l in open(os.environ["WEBNG_TEST_CALLS"] + ".args")]
     pdist_args = [a for a in args if a[0] == "w_pdist"][-1]
     assert json.loads(pdist_args[pdist_args.index("-b") + 1]) == [[-0.5, 0.5]]   # all-zero pcoord
+
+
+# ---------------------------------------------------------------------------
+# n-workers and assign-h5
+# ---------------------------------------------------------------------------
+
+def _tool_args(name):
+    lines = open(os.environ["WEBNG_TEST_CALLS"] + ".args").read().splitlines()
+    return [a for a in map(json.loads, lines) if a[0] == name][-1]
+
+
+def test_n_workers_reaches_the_parallel_tools(sim):
+    _, an, take_calls = sim
+    an.n_workers = 3
+    an.ensure_pdist().close()
+    with open("states.yaml", "w") as f:
+        f.write("states:\n  - label: SC\n")
+    an.ensure_assign()
+    flags = ["--work-manager", "processes", "--n-workers", "3"]
+    for tool in ("w_pdist", "w_assign"):
+        args = _tool_args(tool)
+        i = args.index("--work-manager")
+        assert args[i:i + 4] == flags
+
+
+def test_without_n_workers_westpa_chooses(sim):
+    _, an, take_calls = sim
+    an.ensure_pdist().close()
+    assert "--work-manager" not in _tool_args("w_pdist")
+
+
+def _assign_file(path, state_map):
+    with h5py.File(path, "w") as f:
+        f["state_map"] = np.array(state_map)
+        f["state_labels"] = np.array([b"SC", b"TE"])
+
+
+def test_provided_assign_is_used_as_is(sim, tmp_path):
+    _, an, take_calls = sim
+    mine = tmp_path / "my_assign.h5"
+    _assign_file(mine, [0, 1, 1, 2])
+    an.provided_assign = str(mine)
+    stamp = an.ensure_assign()
+    assert take_calls() == []                    # no w_assign
+    assert an.assign_path == str(mine)
+    assert an.ensure_assign() == stamp           # stable while the file is
+    _assign_file(mine, [0, 0, 1, 2])             # replaced: different assignments
+    assert an.ensure_assign() != stamp           # so outputs built on it rebuild
+
+
+def test_provided_assign_must_exist_and_have_states(sim, tmp_path):
+    _, an, _ = sim
+    an.provided_assign = str(tmp_path / "missing.h5")
+    with pytest.raises(RuntimeError, match="does not exist"):
+        an.ensure_assign()
+    with h5py.File(tmp_path / "no_states.h5", "w") as f:
+        f["something"] = [1]
+    an.provided_assign = str(tmp_path / "no_states.h5")
+    with pytest.raises(RuntimeError, match="state_map"):
+        an.ensure_assign()

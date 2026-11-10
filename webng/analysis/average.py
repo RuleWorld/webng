@@ -50,50 +50,33 @@ class weAverage(weAnalysis):
         # get analysis bins
         self.bins = self._getd(opts, "bins", default=30, required=False)
 
-        # handle plotting bin boundaries if needed
+        # handle plotting bin boundaries if needed: from the bin mapper the run
+        # itself stored in west.h5 (system.py is never run, only imported)
         self.style = None
         self.boundaries = None
         self.mapper = None
         if self.plot_boundaries:
             try:
-                from system import System
-                sys_obj = System()
-                sys_obj.initialize()
-                # Detect style from the mapper type
-                mapper_type = type(sys_obj.bin_mapper).__name__
-                if mapper_type == "RectilinearBinMapper":
+                mapper = self.get_mapper(
+                    self._getd(opts, "mapper-iter", default=None, required=False))
+                if hasattr(mapper, "boundaries"):       # regular (rectilinear) bins
                     self.style = "regular"
-                    self.boundaries = sys_obj.bin_mapper.boundaries
-                elif mapper_type == "SingleBinMapper":
-                    self.style = "mabl"
-                    # plot_boundaries is silently ignored for MABL
-                else:
-                    # Assume adaptive (VoronoiBinMapper or similar)
+                    self.boundaries = mapper.boundaries
+                elif hasattr(mapper, "centers"):        # adaptive (Voronoi) bins
                     self.style = "adaptive"
-                    self.mapper = self.get_mapper(
-                        self._getd(opts, "mapper-iter", default=None, required=False)
-                    )
+                    self.mapper = mapper
+                else:                                   # e.g. MABL's single bin: nothing to draw
+                    self.style = "none"
             except Exception as e:
-                print("Warning: could not determine binning style for boundary "
-                    "plotting: {}".format(e))
+                print("Warning: could not load the run's bin mapper for boundary "
+                      "plotting: {}".format(e))
 
-    def get_mapper(self, mapper_iter):
-        # Gotta fix this behavior
-        if mapper_iter is None:
-            mapper_iter = self.h5file.attrs["west_current_iteration"] - 1
-        # Load in mapper from the iteration given/found
-        print(
-            "Loading file {}, mapper from iteration {}".format(
-                self.h5file_path, mapper_iter
-            )
-        )
-        # We have to rewrite this behavior to always have A mapper from somewhere
-        # and warn the user appropriately, atm this is very shaky
-        try:
-            self.mapper = utils.load_mapper(self.h5file, mapper_iter)
-        except:
-            self.mapper = utils.load_mapper(self.h5file, mapper_iter - 1)
-        return self.mapper
+    def get_mapper(self, mapper_iter=None):
+        """The bin mapper stored for `mapper_iter` (default: the last finished
+        iteration); see weAnalysis.load_run_mapper."""
+        print("Loading the bin mapper from {}, iteration {}".format(
+            self.west_path, mapper_iter if mapper_iter is not None else "(last finished)"))
+        return self.load_run_mapper(mapper_iter)
 
     def setup_figure(self):
         # Setup the figure and names for each dimension

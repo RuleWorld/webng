@@ -40,7 +40,7 @@ class weNetwork(weAnalysis):
             "w_direct",
             "all",
             "-W", "{}".format(self.h5file_path),
-            "-a", os.path.abspath("assign.h5"),
+            "-a", self.assign_path,
             "--first-iter", "{}".format(self.first_iter),
             "--last-iter", "{}".format(self.last_iter),
             "--step-iter", "{}".format(self.step_iter),

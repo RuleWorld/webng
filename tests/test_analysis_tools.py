@@ -8,17 +8,22 @@ fluxanl.h5), stamped as built from the current inputs, so the analysis cache
 reuses it instead of running the tool. pcca's numerical pieces are checked
 directly, each against an answer worked out by hand.
 """
+import os
+import pickle
+import sys
+
 import h5py
 import numpy as np
 import pytest
 import yaml
 
-from webng.analysis.analysis import STAMP_ATTR
+from webng.analysis.analysis import STAMP_ATTR, weAnalysis
+from webng.analysis.average import weAverage
 from webng.analysis.cluster import weCluster
 from webng.analysis.flux import weFlux
 from webng.analysis.network import weNetwork
 from webng.analysis.pcca import wePCCA
-from conftest import CI_DTYPE, write_stamped
+from conftest import CI_DTYPE, write_stamped, write_west
 
 
 # ---------------------------------------------------------------------------
@@ -246,16 +251,19 @@ def test_mfpt_missing_target_is_nan(pcca):
 # transition matrix from w_reweight's tmat.h5
 # ---------------------------------------------------------------------------
 
-def _write_tmat(path, per_iteration, nbins):
+def _write_tmat(path, per_iteration, nbins, nstates):
     """
-    tmat.h5 in w_reweight's layout: each bin is a 2x2 block of rows/cols
-    (w_reweight's own doubling, unrelated to macrostates). `per_iteration`
-    maps n_iter -> dense nbins x nbins flux matrix; each bin-level entry is
-    split across its 2x2 block so the block sums back to it.
+    tmat.h5 in w_reweight's layout: the matrix is history-augmented, nbins x
+    nstates rows, row r being bin r // nstates with last-visited state
+    r % nstates (as WESTPA's bin_state_map / bin_last_state_map lay it out).
+    `per_iteration` maps n_iter -> dense nbins x nbins flux matrix; each
+    bin-level entry is spread over several of its (state, state) sub-cells,
+    including the last state, so the sub-cells sum back to it.
     """
+    shares = [(0, 0, 0.4), (nstates - 1, 0, 0.3), (nstates - 1, nstates - 1, 0.2), (0, nstates - 1, 0.1)]
     with h5py.File(path, "w") as f:
-        f.attrs["nrows"] = 2 * nbins
-        f.attrs["ncols"] = 2 * nbins
+        f.attrs["nrows"] = nstates * nbins
+        f.attrs["ncols"] = nstates * nbins
         iters = sorted(per_iteration)
         f.attrs["iter_start"] = iters[0]
         f.attrs["iter_stop"] = iters[-1] + 1
@@ -264,31 +272,40 @@ def _write_tmat(path, per_iteration, nbins):
             for bi in range(nbins):
                 for bj in range(nbins):
                     if flux[bi, bj]:
-                        for r, c, share in [(0, 0, 0.5), (1, 1, 0.3), (0, 1, 0.2)]:
-                            rows.append(2 * bi + r)
-                            cols.append(2 * bj + c)
+                        for r, c, share in shares:
+                            rows.append(nstates * bi + r)
+                            cols.append(nstates * bj + c)
                             vals.append(share * flux[bi, bj])
             g = f.create_group("iterations/iter_{:08d}".format(n_iter))
             g["rows"], g["cols"], g["flux"] = np.array(rows), np.array(cols), np.array(vals)
 
 
-def test_transition_matrix_averaged_and_row_normalized(pcca, tmp_path):
+@pytest.mark.parametrize("nstates", [2, 4])
+def test_transition_matrix_averaged_and_row_normalized(pcca, tmp_path, nstates):
+    """Grouping w_reweight's rows must follow the number of states (a fixed 2
+    only worked for two-state analyses)."""
     it1 = np.array([[3.0, 1.0, 0.0],
                     [1.0, 1.0, 0.0],
                     [0.0, 0.0, 0.0]])      # bin 2 never visited
     it2 = np.array([[1.0, 3.0, 0.0],
                     [0.0, 2.0, 0.0],
                     [0.0, 0.0, 0.0]])
-    _write_tmat(tmp_path / "tmat.h5", {1: it1, 2: it2}, nbins=3)
-    tm_norm, all_iter_tms, nbins = pcca.build_transition_matrix(str(tmp_path / "tmat.h5"))
-
+    _write_tmat(tmp_path / "tmat.h5", {1: it1, 2: it2}, nbins=3, nstates=nstates)
+    tm_norm, all_iter_tms, nbins = pcca.build_transition_matrix(str(tmp_path / "tmat.h5"),
+                                                                 nstates=nstates)
     assert nbins == 3
-    assert all_iter_tms[1] == pytest.approx(it1)      # 2x2 blocks summed back to bins
+    assert all_iter_tms[1] == pytest.approx(it1)      # sub-cells summed back to bins
     avg = (it1 + it2) / 2
     assert tm_norm[0] == pytest.approx(avg[0] / avg[0].sum())
     assert tm_norm[1] == pytest.approx(avg[1] / avg[1].sum())
     assert tm_norm[:2].sum(axis=1) == pytest.approx([1.0, 1.0])
     assert not tm_norm[2].any()                        # unvisited stays zero
+
+
+def test_transition_matrix_rejects_a_shape_that_doesnt_fit(pcca, tmp_path):
+    _write_tmat(tmp_path / "tmat.h5", {1: np.eye(3)}, nbins=3, nstates=4)    # 12 rows
+    with pytest.raises(ValueError, match="states"):
+        pcca.build_transition_matrix(str(tmp_path / "tmat.h5"), nstates=5)
 
 
 # ---------------------------------------------------------------------------
@@ -334,3 +351,115 @@ def test_state_assignment_reads_state_map(pcca, tmp_path):
     assignments, labels = pcca.load_bin_state_assignment(str(tmp_path / "assign.h5"), 5)
     assert list(assignments) == [0, -999, 1, 1, 0]
     assert labels == {0: "SC", 1: "TE"}
+
+# ===========================================================================
+# stored bin mappers (weAnalysis.load_run_mapper), used by average and pcca
+# ===========================================================================
+
+SYSTEM_PY = """
+import os
+{top}
+
+# stand-ins for WESTPA's mapper classes, defined here like a custom mapper
+class Rect:
+    def __init__(self, boundaries): self.boundaries = boundaries
+class Voro:
+    def __init__(self, centers): self.centers = centers
+class Single:
+    pass
+
+class System:
+    def initialize(self):
+        {init}
+"""
+
+# a system.py reading a file next to it (like west_movement.h5), either when
+# imported or in initialize(); initialize() must never be called either way
+PLACEMENTS = {
+    "at import": dict(top="CENTERS = open('west_movement.dat').read()",
+                      init="raise RuntimeError('initialize() should never be called')"),
+    "in initialize": dict(top="",
+                          init="open('west_movement.dat').read(); raise RuntimeError('called')"),
+}
+
+
+def _sim_with_stored_mapper(tmp_path, placement, make_mapper):
+    """A sim whose west.h5 stores make_mapper(system_module) for iterations 1-2."""
+    sim = tmp_path / "sim"
+    (sim / "analysis").mkdir(parents=True)
+    (sim / "system.py").write_text(SYSTEM_PY.format(**PLACEMENTS[placement]))
+    (sim / "west_movement.dat").write_text("centers")
+    write_west(sim, 3, ndim=2)
+    # pickle a mapper defined in this system.py, the way WESTPA stores one
+    here = os.getcwd()
+    sys.path.insert(0, str(sim))
+    os.chdir(sim)
+    sys.modules.pop("system", None)
+    try:
+        import system
+        data = np.frombuffer(pickle.dumps(make_mapper(system)), dtype=np.uint8)
+    finally:
+        sys.modules.pop("system", None)
+        sys.path.remove(str(sim))
+        os.chdir(here)
+    index = np.zeros(1, dtype=[("hash", "S64"), ("pickle_len", "i8")])
+    index[0] = (b"abc123", len(data))
+    with h5py.File(sim / "west.h5", "a") as f:
+        f.create_dataset("bin_topologies/index", data=index)
+        f.create_dataset("bin_topologies/pickles", data=data[None, :])
+        for n in (1, 2):
+            f["iterations/iter_{:08d}".format(n)].attrs["binhash"] = "abc123"
+    return sim
+
+
+def _analysis_elsewhere(tmp_path, monkeypatch, cls=None, **opts):
+    """An analysis of tmp_path/sim working from a folder outside the sim folder."""
+    monkeypatch.chdir(tmp_path)
+    base = {"sim_name": "sim", "work-path": "elsewhere", "pcoords": ["A", "B"],
+            "first-iter": None, "last-iter": None}
+    base.update(opts)
+    return (cls or weAnalysis)(base)
+
+
+@pytest.mark.parametrize("placement", sorted(PLACEMENTS))
+def test_stored_mapper_loads_from_outside_the_sim_folder(tmp_path, monkeypatch, placement):
+    _sim_with_stored_mapper(tmp_path, placement, lambda s: s.Voro(np.array([[1.0, 2.0]])))
+    an = _analysis_elsewhere(tmp_path, monkeypatch)
+    try:
+        mapper = an.load_run_mapper()
+        assert type(mapper).__name__ == "Voro" and mapper.centers.tolist() == [[1.0, 2.0]]
+        assert os.getcwd() == str(tmp_path / "elsewhere")        # back where it was
+    finally:
+        an.h5file.close()
+        os.chdir(an.curr_path)
+        sys.modules.pop("system", None)
+
+
+@pytest.mark.parametrize("make, style", [
+    (lambda s: s.Rect([[0, 10, 20], [0, 5]]), "regular"),
+    (lambda s: s.Voro(np.array([[1.0, 2.0]])), "adaptive"),
+    (lambda s: s.Single(), "none"),
+])
+def test_average_reads_the_binning_style_from_the_stored_mapper(tmp_path, monkeypatch, capsys, make, style):
+    _sim_with_stored_mapper(tmp_path, "at import", make)
+    av = _analysis_elsewhere(tmp_path, monkeypatch, cls=weAverage, **{"plot-boundaries": True})
+    try:
+        assert av.style == style
+        assert "Warning" not in capsys.readouterr().out
+        if style == "regular":
+            assert av.boundaries == [[0, 10, 20], [0, 5]]
+    finally:
+        av.h5file.close()
+        os.chdir(av.curr_path)
+        sys.modules.pop("system", None)
+
+
+def test_pcca_centers_need_voronoi_bins(tmp_path, monkeypatch):
+    sim = _sim_with_stored_mapper(tmp_path, "at import", lambda s: s.Rect([[0, 1]]))
+    p = wePCCA.__new__(wePCCA)
+    p.sim_path, p.west_path = str(sim), str(sim / "west.h5")
+    try:
+        with pytest.raises(ValueError, match="adaptive \\(Voronoi\\) binning"):
+            p.load_final_centers(p.west_path)
+    finally:
+        sys.modules.pop("system", None)

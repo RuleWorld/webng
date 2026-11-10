@@ -37,6 +37,10 @@ class weAnalysis:
             analysis_bins = analysis_dict["analysis_bins"]
             first_iter = analysis_dict["first-iter"]
             last_iter = analysis_dict["last-iter"]
+            # worker processes for WESTPA tools (None: WESTPA's default), and an
+            # existing assign.h5 to use as-is instead of running w_assign
+            n_workers = analysis_dict.get("n-workers")
+            assign_h5 = analysis_dict.get("assign-h5")
             tau = self.opts["sampling_options"]["tau"]
             if self._getd(analysis_dict, "enabled", default=True):
                 # we should run the analyses we have
@@ -52,6 +56,7 @@ class weAnalysis:
                         avg_dict["bins"] = analysis_bins
                         avg_dict["first-iter"] = first_iter
                         avg_dict["last-iter"] = last_iter
+                        avg_dict["n-workers"] = n_workers
                         weAverage(avg_dict).run()
                 if "evolution" in analysis_list:
                     evo_dict = analysis_dict["evolution"]
@@ -64,6 +69,7 @@ class weAnalysis:
                         evo_dict["bins"] = analysis_bins
                         evo_dict["first-iter"] = first_iter
                         evo_dict["last-iter"] = last_iter
+                        evo_dict["n-workers"] = n_workers
                         weEvolution(evo_dict).run()
                 if "cluster" in analysis_list:
                     clust_dict = analysis_dict["cluster"]
@@ -78,6 +84,7 @@ class weAnalysis:
                         clust_dict["bins"] = analysis_bins
                         clust_dict["first-iter"] = first_iter
                         clust_dict["last-iter"] = last_iter
+                        clust_dict["n-workers"] = n_workers
                         weCluster(clust_dict).run()
                 if "network" in analysis_list:
                     net_dict = analysis_dict["network"]
@@ -96,6 +103,8 @@ class weAnalysis:
                         net_dict["work-path"] = work_path
                         net_dict["first-iter"] = first_iter
                         net_dict["last-iter"] = last_iter
+                        net_dict["n-workers"] = n_workers
+                        net_dict["assign-h5"] = assign_h5
                         net_dict["tau"] = tau
                         weNetwork(net_dict).run()
                 if "flux" in analysis_list:
@@ -117,5 +126,7 @@ class weAnalysis:
                         pcca_dict["work-path"]  = work_path
                         pcca_dict["first-iter"] = first_iter
                         pcca_dict["last-iter"]  = last_iter
+                        pcca_dict["n-workers"] = n_workers
+                        pcca_dict["assign-h5"] = assign_h5
                         pcca_dict["sampling_options"] = self.opts["sampling_options"]
                         wePCCA(pcca_dict).run()

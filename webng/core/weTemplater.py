@@ -126,6 +126,8 @@ class weTemplater:
                 "first-iter": None,
                 "last-iter": None,
                 "work-path": None,
+                "n-workers": None,
+                "assign-h5": None,
                 "average": {
                     "enabled": False,
                     "config_file": None,
