@@ -194,6 +194,43 @@ class TestBngWestcfg:
 
 
 # ---------------------------------------------------------------------------
+# Files copied from webng/assets (the same for every simulation)
+# ---------------------------------------------------------------------------
+
+STATIC_FILES = [
+    # writer, asset in webng/assets, where setup puts it, executable
+    ("_write_bngPropagator", "bng_propagator.py", "bng_propagator.py", False),
+    ("_write_librrPropagator", "libRR_propagator.py", "libRR_propagator.py", False),
+    ("_write_ezgillespzPropagator", "ezgillespz_propagator.py", "ezgillespz_propagator.py", False),
+    ("_write_restartDriver", "restart_plugin.py", "restart_plugin.py", False),
+    ("_write_auxfuncs", "aux_functions.py", "aux_functions.py", False),
+    ("_write_getpcoord_sh", "get_pcoord.sh", "westpa_scripts/get_pcoord.sh", True),
+    ("_write_postiter_sh", "post_iter.sh", "westpa_scripts/post_iter.sh", True),
+]
+
+
+@pytest.mark.parametrize("writer, asset, dest, executable", STATIC_FILES)
+def test_static_files_are_copied_from_assets(bare_weconvert, tmp_path, monkeypatch, writer, asset, dest, executable):
+    import os
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "westpa_scripts").mkdir()
+    getattr(bare_weconvert(), writer)()
+    src = os.path.join(weConvert._assets_dir(), asset)
+    assert (tmp_path / dest).read_bytes() == open(src, "rb").read()
+    assert os.access(tmp_path / dest, os.X_OK) == executable
+    if asset.endswith(".py"):
+        ast.parse((tmp_path / dest).read_text())
+
+
+def test_every_python_asset_is_valid():
+    """Assets are copied verbatim, so a syntax error would only show up in a
+    user's run; catch it here."""
+    import glob, os
+    for path in glob.glob(os.path.join(weConvert._assets_dir(), "*.py")):
+        ast.parse(open(path).read(), filename=path)
+
+
+# ---------------------------------------------------------------------------
 # libRoadRunner — parity coverage: this propagator had no test coverage
 # at all before, despite being one of only two options prior to bng.
 # ---------------------------------------------------------------------------

@@ -458,7 +458,7 @@ class weConvert:
         setup-time sampling uses the same engine handling as the run.
         """
         import importlib.util
-        path = os.path.join(weConvert._bng_assets_dir(), "ezgillespz_propagator.py")
+        path = os.path.join(weConvert._assets_dir(), "ezgillespz_propagator.py")
         spec = importlib.util.spec_from_file_location("webng_ezgillespz_propagator", path)
         mod = importlib.util.module_from_spec(spec)
         try:
@@ -739,514 +739,46 @@ class weConvert:
                 coords_str = " ".join("{:.6g}".format(v) for v in center)
                 f.write("t{} {}\n".format(i, coords_str))
 
+    @staticmethod
+    def _assets_dir():
+        """webng/assets: files copied into simulation folders as they are
+        (propagators, plugins, scripts) and the bundled libssa builds."""
+        core_dir = os.path.dirname(os.path.abspath(__file__))   # webng/core
+        return os.path.join(os.path.dirname(core_dir), "assets")  # webng/assets
+
+    def _copy_asset(self, name, dest=None, mode=None):
+        """
+        Copy webng/assets/<name> into the simulation folder (the current
+        folder during setup) as dest, by default under the same name, and
+        set its permissions to mode if given. For the files that are the same
+        for every simulation; files that depend on the options are still
+        written by their _write_* methods.
+        """
+        dest = dest or name
+        shutil.copyfile(os.path.join(self._assets_dir(), name), dest)
+        if mode is not None:
+            os.chmod(dest, mode)
+
     def _write_librrPropagator(self):
-        lines = [
-            "from __future__ import division, print_function; __metaclass__ = type",
-            "import numpy as np",
-            "import westpa, copy, time, random, os",
-            "from westpa.core.propagators import WESTPropagator",
-            "from westpa.core.segment import Segment",
-            "import roadrunner as librr",
-            "import logging",
-            "log = logging.getLogger(__name__)",
-            "log.debug('loading module %r' % __name__)",
-            "",
-            "",
-            "class librrPropagator(WESTPropagator):",
-            "    def __init__(self, rc=None):",
-            "        super(librrPropagator, self).__init__(rc)",
-            "        config = self.rc.config",
-            "        for key in [('west','librr','init','model_file'),",
-            "                    ('west','librr','init','init_time_step'),",
-            "                    ('west','librr','init','final_time_step'),",
-            "                    ('west','librr','init','num_time_step'),",
-            "                    ('west','librr','data','pcoords')]:",
-            "            config.require(key)",
-            "        self.runner_config = {}",
-            "        self.runner_config['model_file']  = os.path.normpath(",
-            "            config['west','librr','init','model_file'])",
-            "        self.runner_config['init_ts']     = config['west','librr','init','init_time_step']",
-            "        self.runner_config['final_ts']    = config['west','librr','init','final_time_step']",
-            "        self.runner_config['num_ts']      = config['west','librr','init','num_time_step']",
-            "        self.runner_config['pcoord_keys'] = config['west','librr','data','pcoords']",
-            "        self.runner = librr.RoadRunner(self.runner_config['model_file'])",
-            "        self.runner.setIntegrator('gillespie')",
-            "        self.runner.setIntegratorSetting('gillespie', 'variable_step_size', False)",
-            "        self.runner.setIntegratorSetting('gillespie', 'nonnegative', True)",
-            "        self.initial_pcoord  = self.get_initial_pcoords()",
-            "        self.full_state_keys = self.get_full_state_keys()",
-            "        self.runner.timeCourseSelections = self.runner_config['pcoord_keys']",
-            "",
-            "    def get_pcoord(self, state):",
-            "        state.pcoord = copy.copy(self.initial_pcoord)",
-            "",
-            "    def gen_istate(self, basis_state, initial_state):",
-            "        # Sample a microstate from the pool and set both the",
-            "        # runner state and the recorded pcoord so WESTPA's bin",
-            "        # assignment reflects where the walker actually starts.",
-            "        pool_path = os.path.join(",
-            "            os.environ.get('WEST_SIM_ROOT', '.'), 'bstates',",
-            "            'microstate_pool.dat')",
-            "        if os.path.isfile(pool_path):",
-            "            data = np.loadtxt(pool_path, comments='#')",
-            "            if data.ndim == 1:",
-            "                data = data.reshape(1, -1)",
-            "            weights = data[:, 0]",
-            "            counts  = data[:, 1:]",
-            "            weights = weights / weights.sum()",
-            "            idx     = np.random.choice(len(counts), p=weights)",
-            "            pool_ms = np.array(counts[idx], dtype=np.float64)",
-            "            vec     = self._build_full_state(pool_ms)",
-            "            if vec is not None:",
-            "                self.runner.resetAll()",
-            "                self.set_runner_state(vec)",
-            "        initial_state.pcoord = self.get_initial_pcoords()",
-            "        return initial_state",
-            "",
-            "    def get_initial_pcoords(self):",
-            "        return [self.runner[x] for x in self.runner_config['pcoord_keys']]",
-            "",
-            "    def get_full_state_keys(self):",
-            "        fs    = self.runner.getFloatingSpeciesAmountsNamedArray().colnames",
-            "        concs = ['[' + x + ']' for x in fs]",
-            "        return fs + concs",
-            "",
-            "    def get_final_state(self):",
-            "        return [self.runner[x] for x in self.full_state_keys]",
-            "",
-            "    def set_runner_state(self, state):",
-            "        if all(x == -1 for x in state):",
-            "            self.runner.resetAll()",
-            "        else:",
-            "            for i, val in enumerate(state):",
-            "                self.runner.setValue(self.full_state_keys[i], val)",
-            "",
-            "    def _build_full_state(self, pool_microstate):",
-            "        '''",
-            "        Convert a pool_microstate vector (raw species amounts, length",
-            "        n_species) into the full_state_keys-compatible vector",
-            "        (amounts + concentrations, length 2*n_species).",
-            "        For SSA models volume=1 so amount == concentration.",
-            "        Returns None if length does not match.",
-            "        '''",
-            "        n_sp = len(self.full_state_keys) // 2",
-            "        counts = list(pool_microstate)",
-            "        if len(counts) != n_sp:",
-            "            log.warning(",
-            "                'pool_microstate length %d != expected %d; using resetAll().',",
-            "                len(counts), n_sp)",
-            "            return None",
-            "        return counts + counts   # amounts then concentrations",
-            "",
-            "    def propagate(self, segments):",
-            "        for segment in segments:",
-            "            piter     = segment.n_iter - 1",
-            "            starttime = time.time()",
-            "            seed      = random.randint(0, 2**14)",
-            "            self.runner.resetAll()",
-            "            self.runner.setIntegratorSetting('gillespie', 'seed', seed)",
-            "",
-            "            if piter == 0:",
-            "                # ── First iteration ─────────────────────────────",
-            "                # RestartDriver does not run at iter 1, so we sample",
-            "                # directly from pool_microstate if it was set during",
-            "                # w_init (future), otherwise use model defaults.",
-            "                pool_ms = segment.data.get('pool_microstate', None)",
-            "                if pool_ms is not None:",
-            "                    vec = self._build_full_state(pool_ms)",
-            "                    if vec is not None:",
-            "                        self.set_runner_state(vec)",
-            "                        log.debug('iter1 seg %d: set state from pool.',",
-            "                                  segment.seg_id)",
-            "                # else: resetAll() already called — model defaults",
-            "",
-            "            else:",
-            "                restart = segment.data.get('restart_state')",
-            "                if restart is not None and not all(x == -1 for x in restart):",
-            "                    # ── Normal continuing walker ─────────────────",
-            "                    self.set_runner_state(restart)",
-            "                else:",
-            "                    # ── Recycled walker ──────────────────────────",
-            "                    pool_ms = segment.data.get('pool_microstate', None)",
-            "                    if pool_ms is not None:",
-            "                        vec = self._build_full_state(pool_ms)",
-            "                        if vec is not None:",
-            "                            self.set_runner_state(vec)",
-            "                            log.debug(",
-            "                                'recycled seg %d: set state from pool.',",
-            "                                segment.seg_id)",
-            "                    # else: resetAll() already called — graceful fallback",
-            "",
-            "            result = self.runner.simulate(",
-            "                self.runner_config['init_ts'],",
-            "                self.runner_config['final_ts'],",
-            "                self.runner_config['num_ts'],",
-            "            )",
-            "            segment.data['final_state'] = self.get_final_state()",
-            "            segment.data['seed']        = seed",
-            "            segment.pcoord              = result",
-            "            segment.data.pop('pool_microstate', None)",
-            "            segment.walltime            = time.time() - starttime",
-            "            segment.cputime             = 0",
-            "            segment.status              = segment.SEG_STATUS_COMPLETE",
-            "        return segments",
-        ]
-        full_text = "\n".join(lines)
-        with open("libRR_propagator.py", "w") as f:
-            f.write(full_text)
+        """libRR_propagator.py, the same for every simulation: copied from webng/assets."""
+        self._copy_asset("libRR_propagator.py")
 
     def _write_bngPropagator(self):
-        lines = [
-            "from __future__ import division, print_function; __metaclass__ = type",
-            "import numpy as np",
-            "import ctypes, os, time, random, logging",
-            "from westpa.core.propagators import WESTPropagator",
-            "log = logging.getLogger(__name__)",
-            "log.debug('loading module %r' % __name__)",
-            "",
-            "",
-            "def _load_bng_lib():",
-            "    here = os.path.dirname(os.path.abspath(__file__))",
-            "    lib_path = os.path.join(here, 'libssa.so')",
-            "    if not os.path.isfile(lib_path):",
-            "        raise FileNotFoundError(",
-            "            'libssa.so not found at {}. It should have been copied '",
-            "            'into the simulation root by \\\"webng setup\\\".'.format(lib_path)",
-            "        )",
-            "    try:",
-            "        lib = ctypes.CDLL(lib_path)",
-            "    except OSError as e:",
-            "        raise OSError(",
-            "            'Found libssa.so at {} but could not load it ({}). '",
-            "            'This is almost always a platform/architecture mismatch '",
-            "            '-- e.g. a Linux-built libssa.so on macOS or Windows. '",
-            "            'Rebuild it for this machine with build_libssa.sh.'",
-            "            .format(lib_path, e)",
-            "        ) from e",
-            "",
-            "    lib.ssa_init.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]",
-            "    lib.ssa_init.restype  = ctypes.c_int",
-            "",
-            "    lib.ssa_set_state.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int]",
-            "    lib.ssa_set_state.restype  = ctypes.c_int",
-            "",
-            "    lib.ssa_run.argtypes = [ctypes.c_double, ctypes.c_double]",
-            "    lib.ssa_run.restype  = ctypes.c_int",
-            "",
-            "    lib.ssa_run_multi.argtypes = [",
-            "        ctypes.c_double, ctypes.c_double, ctypes.c_int,",
-            "        ctypes.POINTER(ctypes.c_double), ctypes.c_int,",
-            "    ]",
-            "    lib.ssa_run_multi.restype = ctypes.c_int",
-            "",
-            "    lib.ssa_get_state.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int]",
-            "    lib.ssa_get_state.restype  = ctypes.c_int",
-            "",
-            "    lib.ssa_get_n_species.argtypes = []",
-            "    lib.ssa_get_n_species.restype  = ctypes.c_int",
-            "",
-            "    lib.ssa_get_last_error.argtypes = []",
-            "    lib.ssa_get_last_error.restype  = ctypes.c_char_p",
-            "",
-            "    lib.ssa_reseed.argtypes = [ctypes.c_int]",
-            "    lib.ssa_reseed.restype  = None",
-            "    return lib",
-            "",
-            "",
-            "def _parse_net_groups(net_file):",
-            "    '''",
-            "    Parse the 'begin groups' block of a .net file into",
-            "    {observable_name: [(0-based species index, coefficient), ...]}.",
-            "    Handles both bare indices ('3') and weighted terms ('2*3'),",
-            "    and sums over every term rather than assuming a single species.",
-            "    '''",
-            "    groups, in_block = {}, False",
-            "    with open(net_file) as f:",
-            "        for line in f:",
-            "            s = line.strip()",
-            "            if s.startswith('begin groups'):",
-            "                in_block = True",
-            "                continue",
-            "            if s.startswith('end groups'):",
-            "                break",
-            "            if in_block and s and not s.startswith('#'):",
-            "                parts = s.split()",
-            "                if len(parts) >= 3:",
-            "                    name  = parts[1]",
-            "                    terms = []",
-            "                    for token in parts[2].split(','):",
-            "                        token = token.strip()",
-            "                        if '*' in token:",
-            "                            coeff_str, idx_str = token.split('*', 1)",
-            "                            coeff = float(coeff_str)",
-            "                        else:",
-            "                            idx_str, coeff = token, 1.0",
-            "                        try:",
-            "                            terms.append((int(idx_str) - 1, coeff))",
-            "                        except ValueError:",
-            "                            pass",
-            "                    if terms:",
-            "                        groups[name] = terms",
-            "    return groups",
-            "",
-            "",
-            "def _parse_net_species_counts(net_file, n_species):",
-            "    '''Return a length-n_species array of species counts from a .net file.'''",
-            "    counts = np.zeros(n_species, dtype=np.float64)",
-            "    in_block = False",
-            "    with open(net_file) as f:",
-            "        for line in f:",
-            "            s = line.strip()",
-            "            if s.startswith('begin species'):",
-            "                in_block = True",
-            "                continue",
-            "            if s.startswith('end species'):",
-            "                break",
-            "            if in_block and s and not s.startswith('#'):",
-            "                parts = s.split()",
-            "                if len(parts) >= 3:",
-            "                    idx = int(parts[0]) - 1",
-            "                    if idx >= n_species:",
-            "                        continue",
-            "                    try:",
-            "                        counts[idx] = float(parts[2])",
-            "                    except ValueError:",
-            "                        raise ValueError(",
-            "                            'species {} in {} has a non-numeric count {!r}; '",
-            "                            'starting counts must be numbers.'",
-            "                            .format(idx + 1, net_file, parts[2])",
-            "                        )",
-            "    return counts",
-            "",
-            "",
-            "class bngPropagator(WESTPropagator):",
-            "    def __init__(self, rc=None):",
-            "        super(bngPropagator, self).__init__(rc)",
-            "        config = self.rc.config",
-            "        for key in [('west', 'bng', 'init', 'net_file'),",
-            "                    ('west', 'bng', 'init', 'init_time_step'),",
-            "                    ('west', 'bng', 'init', 'final_time_step'),",
-            "                    ('west', 'bng', 'init', 'num_time_step'),",
-            "                    ('west', 'bng', 'data', 'pcoords')]:",
-            "            config.require(key)",
-            "",
-            "        self.net_file    = os.path.normpath(config['west', 'bng', 'init', 'net_file'])",
-            "        self.t_start     = float(config['west', 'bng', 'init', 'init_time_step'])",
-            "        self.t_end       = float(config['west', 'bng', 'init', 'final_time_step'])",
-            "        self.num_ts      = int(config['west', 'bng', 'init', 'num_time_step'])",
-            "        self.pcoord_keys = config['west', 'bng', 'data', 'pcoords']",
-            "        self.gillespie_update_interval = int(",
-            "            config.get(('west', 'bng', 'init', 'gillespie_update_interval'), 1)",
-            "        )",
-            "",
-            "        self._lib = _load_bng_lib()",
-            "        seed = random.randint(0, 2**14)",
-            "        status = self._lib.ssa_init(",
-            "            self.net_file.encode(), seed, self.gillespie_update_interval",
-            "        )",
-            "        if status != 0:",
-            "            err = self._lib.ssa_get_last_error().decode()",
-            "            raise RuntimeError('bngPropagator: ssa_init failed: {}'.format(err))",
-            "",
-            "        self._n_species = self._lib.ssa_get_n_species()",
-            "        log.info('bngPropagator initialized: %d species, net_file=%s',",
-            "                 self._n_species, self.net_file)",
-            "",
-            "        # Observable definitions: name -> [(species_idx, coeff), ...].",
-            "        # Every term in the group is summed -- this is NOT just the",
-            "        # first listed species, so multi-species / weighted",
-            "        # observables (e.g. 'Group(2) A + Group(3) B') come out correct.",
-            "        group_map = _parse_net_groups(self.net_file)",
-            "        self._pcoord_terms = []",
-            "        for key in self.pcoord_keys:",
-            "            if key in group_map:",
-            "                self._pcoord_terms.append(group_map[key])",
-            "            else:",
-            "                log.warning(",
-            "                    'pcoord key %r not found as an observable in %s; '",
-            "                    'treating it as a bare 1-based species index.',",
-            "                    key, self.net_file)",
-            "                self._pcoord_terms.append([(int(key) - 1, 1.0)])",
-            "",
-            "        self._init_counts = _parse_net_species_counts(self.net_file, self._n_species)",
-            "        self._initial_pcoord = self._weighted_pcoord(self._init_counts)",
-            "",
-            "        # Pre-allocate buffers",
-            "        self._multi_buf = np.zeros(self.num_ts * self._n_species, dtype=np.float64)",
-            "        self._state_buf = np.zeros(self._n_species, dtype=np.float64)",
-            "",
-            "    def _weighted_pcoord(self, state):",
-            "        '''Each observable is the weighted sum of its species terms.'''",
-            "        out = np.zeros(len(self._pcoord_terms), dtype=np.float32)",
-            "        for j, terms in enumerate(self._pcoord_terms):",
-            "            out[j] = sum(coeff * state[idx] for idx, coeff in terms)",
-            "        return out",
-            "",
-            "    def _resolve_net_path(self, auxref):",
-            "        '''Find the .net file a basis state's auxref names (e.g. 0.net, SC.net).'''",
-            "        if not auxref:",
-            "            return None",
-            "        if isinstance(auxref, bytes):",
-            "            auxref = auxref.decode('utf-8').strip()",
-            "        if not auxref:",
-            "            return None",
-            "        net_dir = os.path.dirname(os.path.abspath(self.net_file))",
-            "        for candidate in [",
-            "            os.path.join(net_dir, os.path.basename(auxref)),",
-            "            os.path.abspath(auxref),",
-            "            os.path.join('bstates', os.path.basename(auxref)),",
-            "            auxref,",
-            "        ]:",
-            "            if os.path.isfile(candidate):",
-            "                return candidate",
-            "        log.warning('Could not resolve net file for auxref: %r', auxref)",
-            "        return None",
-            "",
-            "    def _bstate_net_path_for_segment(self, segment):",
-            "        '''",
-            "        The .net file of the basis state a new trajectory started from.",
-            "        WESTPA fills self.initial_states / self.basis_states (via",
-            "        update_basis_initial_states) before every propagate() call, for",
-            "        iteration-1 walkers and recycled walkers alike, so no side",
-            "        channel is needed. Returns None if the lookup comes up empty.",
-            "        '''",
-            "        parent_id = getattr(segment, 'parent_id', None)",
-            "        if parent_id is None or parent_id >= 0:",
-            "            return None",
-            "        istate_id = -(parent_id + 1)",
-            "        initial_state = self.initial_states.get(istate_id)",
-            "        if initial_state is None:",
-            "            log.warning('no initial_state for istate_id=%d (parent_id=%d)',",
-            "                        istate_id, parent_id)",
-            "            return None",
-            "        basis_state = self.basis_states.get(initial_state.basis_state_id)",
-            "        if basis_state is None:",
-            "            log.warning('no basis_state for basis_state_id=%d',",
-            "                        initial_state.basis_state_id)",
-            "            return None",
-            "        return self._resolve_net_path(getattr(basis_state, 'auxref', None))",
-            "",
-            "    def _start_state(self, segment):",
-            "        '''",
-            "        Species counts a segment starts from:",
-            "          continuing walker (parent_id >= 0): the parent's final state,",
-            "            put in segment.data['restart_state'] by the restart plugin",
-            "          new trajectory (parent_id < 0: iteration 1, or recycled):",
-            "            a microstate the restart plugin drew from the pool, if any;",
-            "            otherwise its basis state's .net file; otherwise init.net",
-            "        Never \"whatever the simulator was left in\": that would chain",
-            "        this segment onto the previous one run in the same worker.",
-            "        '''",
-            "        parent_id = getattr(segment, 'parent_id', None)",
-            "        if parent_id is not None and parent_id >= 0:",
-            "            restart = segment.data.get('restart_state')",
-            "            if restart is not None and not all(x == -1 for x in restart):",
-            "                return np.array(restart, dtype=np.float64)",
-            "            raise RuntimeError(",
-            "                'segment {} continues from parent {} but has no restart_state; '",
-            "                'is restart_plugin.RestartDriver enabled in west.cfg?'",
-            "                .format(getattr(segment, 'seg_id', '?'), parent_id)",
-            "            )",
-            "",
-            "        pool_ms = segment.data.get('pool_microstate', None)",
-            "        if pool_ms is not None:",
-            "            state = np.array(pool_ms, dtype=np.float64)",
-            "            if len(state) != self._n_species:",
-            "                log.warning('pool_microstate length %d != expected %d; '",
-            "                            'zero-padding/truncating.', len(state), self._n_species)",
-            "                full = np.zeros(self._n_species, dtype=np.float64)",
-            "                m = min(len(state), self._n_species)",
-            "                full[:m] = state[:m]",
-            "                state = full",
-            "            return state",
-            "",
-            "        net_path = self._bstate_net_path_for_segment(segment)",
-            "        if net_path:",
-            "            return _parse_net_species_counts(net_path, self._n_species)",
-            "        log.warning('segment %s: no basis state found, starting from %s',",
-            "                    getattr(segment, 'seg_id', '?'), self.net_file)",
-            "        return self._init_counts.copy()",
-            "",
-            "    def get_pcoord(self, state):",
-            "        # state is a BasisState here; its auxref names its .net file",
-            "        net_path = self._resolve_net_path(getattr(state, 'auxref', None))",
-            "        if net_path:",
-            "            counts = _parse_net_species_counts(net_path, self._n_species)",
-            "            state.pcoord = self._weighted_pcoord(counts)",
-            "        else:",
-            "            state.pcoord = self._initial_pcoord.copy()",
-            "",
-            "    def gen_istate(self, basis_state, initial_state):",
-            "        net_path = self._resolve_net_path(getattr(basis_state, 'auxref', None))",
-            "        if net_path:",
-            "            counts = _parse_net_species_counts(net_path, self._n_species)",
-            "            initial_state.pcoord = self._weighted_pcoord(counts)",
-            "        else:",
-            "            initial_state.pcoord = self._initial_pcoord.copy()",
-            "        return initial_state",
-            "",
-            "    def propagate(self, segments):",
-            "        for segment in segments:",
-            "            starttime = time.time()",
-            "            seed  = random.randint(0, 2**14)",
-            "",
-            "            start = self._start_state(segment)",
-            "            ptr = start.ctypes.data_as(ctypes.POINTER(ctypes.c_double))",
-            "            status = self._lib.ssa_set_state(ptr, self._n_species)",
-            "            if status != 0:",
-            "                err = self._lib.ssa_get_last_error().decode()",
-            "                raise RuntimeError('ssa_set_state returned {}: {}'.format(status, err))",
-            "            self._lib.ssa_reseed(seed)",
-            "",
-            "            if self.num_ts == 2:",
-            "                status = self._lib.ssa_run(self.t_start, self.t_end)",
-            "                if status != 0:",
-            "                    err = self._lib.ssa_get_last_error().decode()",
-            "                    log.warning('ssa_run returned %d: %s', status, err)",
-            "",
-            "                ptr = self._state_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_double))",
-            "                self._lib.ssa_get_state(ptr, self._n_species)",
-            "",
-            "                pcoord = np.zeros((2, len(self.pcoord_keys)), dtype=np.float32)",
-            "                pcoord[0] = self._weighted_pcoord(start)",
-            "                pcoord[1] = self._weighted_pcoord(self._state_buf)",
-            "            else:",
-            "                out_ptr = self._multi_buf.ctypes.data_as(ctypes.POINTER(ctypes.c_double))",
-            "                status = self._lib.ssa_run_multi(",
-            "                    self.t_start, self.t_end, self.num_ts, out_ptr, self._n_species",
-            "                )",
-            "                if status != 0:",
-            "                    err = self._lib.ssa_get_last_error().decode()",
-            "                    log.warning('ssa_run_multi returned %d: %s', status, err)",
-            "",
-            "                all_states = self._multi_buf.reshape(self.num_ts, self._n_species)",
-            "                pcoord = np.zeros((self.num_ts, len(self.pcoord_keys)), dtype=np.float32)",
-            "                for ts in range(self.num_ts):",
-            "                    pcoord[ts] = self._weighted_pcoord(all_states[ts])",
-            "                self._state_buf[:] = all_states[-1]",
-            "",
-            "            segment.data['final_state'] = self._state_buf.copy()",
-            "            segment.data['seed']        = seed",
-            "            segment.data.pop('pool_microstate', None)",
-            "            segment.pcoord   = pcoord",
-            "            segment.walltime = time.time() - starttime",
-            "            segment.cputime  = 0",
-            "            segment.status   = segment.SEG_STATUS_COMPLETE",
-            "        return segments",
-        ]
-        full_text = "\n".join(lines)
-        with open("bng_propagator.py", "w") as f:
-            f.write(full_text)
+        """
+        bng_propagator.py, the same for every simulation: copied from
+        webng/assets. It loads libssa.so (see _copy_bng_lib) from its own
+        folder and reads its settings from west.cfg's west.bng section.
+        """
+        self._copy_asset("bng_propagator.py")
 
     def _write_ezgillespzPropagator(self):
         """
-        Copies the ezgillespz propagator (webng/assets/ezgillespz_propagator.py)
-        into the simulation root. It has nothing to template: its settings come
-        from west.cfg's west.ezgillespz section. ezgillespz itself must be
-        installed where w_run runs; it is not a WEBNG dependency.
+        ezgillespz_propagator.py, the same for every simulation: copied from
+        webng/assets. Its settings come from west.cfg's west.ezgillespz
+        section. ezgillespz itself must be installed where w_run runs; it is
+        not a WEBNG dependency.
         """
-        src = os.path.join(self._bng_assets_dir(), "ezgillespz_propagator.py")
-        shutil.copyfile(src, "ezgillespz_propagator.py")
+        self._copy_asset("ezgillespz_propagator.py")
         try:
             import ezgillespz  # noqa: F401
         except ImportError:
@@ -1269,11 +801,6 @@ class weConvert:
             system, (system.lower(), "so"))
         return "libssa-{}-{}.{}".format(os_name, machine, ext)
 
-    @staticmethod
-    def _bng_assets_dir():
-        core_dir = os.path.dirname(os.path.abspath(__file__))   # webng/core
-        return os.path.join(os.path.dirname(core_dir), "assets")  # webng/assets
-
     def _resolve_bng_lib_path(self):
         """
         Where to find libssa:
@@ -1284,7 +811,7 @@ class weConvert:
         """
         if getattr(self, "libssa_path", None):
             return self.libssa_path
-        return os.path.join(self._bng_assets_dir(), self._bng_lib_name())
+        return os.path.join(self._assets_dir(), self._bng_lib_name())
 
     def _copy_bng_lib(self):
         """
@@ -1295,7 +822,7 @@ class weConvert:
         """
         src = self._resolve_bng_lib_path()
         if not os.path.isfile(src):
-            assets = self._bng_assets_dir()
+            assets = self._assets_dir()
             bundled = sorted(f for f in os.listdir(assets) if f.startswith("libssa-")) \
                 if os.path.isdir(assets) else []
             hint = ("On Windows, run WEBNG under WSL, where the Linux build works. "
@@ -1356,97 +883,8 @@ class weConvert:
         return lib
 
     def _write_restartDriver(self):
-        lines = [
-            "from __future__ import division; __metaclass__ = type",
-            "import logging, os, random",
-            "import numpy as np",
-            "log = logging.getLogger(__name__)",
-            "",
-            "",
-            "def _load_pool(bstates_dir):",
-            "    '''",
-            "    Load microstate_pool.dat into a numpy array of shape (N, n_species).",
-            "    Also returns the weight array of shape (N,) normalised to sum=1.",
-            "    Returns (None, None) if the file does not exist (no recycling).",
-            "    '''",
-            "    pool_path = os.path.join(bstates_dir, 'microstate_pool.dat')",
-            "    if not os.path.isfile(pool_path):",
-            "        return None, None",
-            "    data = np.loadtxt(pool_path, comments='#')",
-            "    if data.ndim == 1:",
-            "        data = data.reshape(1, -1)",
-            "    weights  = data[:, 0]",
-            "    counts   = data[:, 1:]",
-            "    weights  = weights / weights.sum()",
-            "    return counts, weights",
-            "",
-            "",
-            "class RestartDriver(object):",
-            "    def __init__(self, sim_manager, plugin_config):",
-            "        super(RestartDriver, self).__init__()",
-            "        if not sim_manager.work_manager.is_master:",
-            "            return",
-            "        self.sim_manager  = sim_manager",
-            "        self.data_manager = sim_manager.data_manager",
-            "        self.system       = sim_manager.system",
-            "        self.priority     = plugin_config.get('priority', 0)",
-            "        sim_manager.register_callback(",
-            "            sim_manager.pre_propagation,",
-            "            self.pre_propagation,",
-            "            self.priority,",
-            "        )",
-            "        # Load the microstate pool once at startup",
-            "        bstates_dir = os.path.join(",
-            "            os.environ.get('WEST_SIM_ROOT', '.'), 'bstates')",
-            "        self.pool_counts, self.pool_weights = _load_pool(bstates_dir)",
-            "        if self.pool_counts is not None:",
-            "            log.info('RestartDriver: loaded microstate pool with %d entries.',",
-            "                     len(self.pool_counts))",
-            "        else:",
-            "            log.info('RestartDriver: no microstate pool found; '",
-            "                     'recycled walkers will use model defaults.')",
-            "",
-            "    def _sample_pool(self):",
-            "        '''Draw one row from the pool by weight. Returns 1-D float64 numpy array.'''",
-            "        if self.pool_counts is None:",
-            "            return None",
-            "        idx = np.random.choice(len(self.pool_counts), p=self.pool_weights)",
-            "        return np.array(self.pool_counts[idx], dtype=np.float64)",
-            "",
-            "    def pre_propagation(self):",
-            "        segments  = self.sim_manager.incomplete_segments.values()",
-            "        n_iter    = self.sim_manager.n_iter",
-            "        if n_iter == 1:",
-            "            return",
-            "        parent_iter_group = self.data_manager.get_iter_group(n_iter - 1)",
-            "        parent_ids        = [seg.parent_id for seg in segments]",
-            "        unique_parent_ids = set(parent_ids)",
-            "        restart_data      = {sid: {} for sid in unique_parent_ids}",
-            "        try:",
-            "            dsinfo = self.data_manager.dataset_options['final_state']",
-            "        except KeyError:",
-            "            raise KeyError('Dataset final_state not found in west.h5')",
-            "        ds = parent_iter_group[dsinfo['h5path']]",
-            "        for seg_id in unique_parent_ids:",
-            "            if seg_id >= 0:",
-            "                # Normal continuing walker",
-            "                restart_data[seg_id]['restart_state']    = ds[seg_id]",
-            "                restart_data[seg_id]['pool_microstate']  = None",
-            "            else:",
-            "                # Recycled walker: sample a microstate from the pool",
-            "                sampled = self._sample_pool()",
-            "                restart_data[seg_id]['restart_state']    = [-1] * ds[0].shape[0]",
-            "                restart_data[seg_id]['pool_microstate']  = sampled",
-            "                log.debug('Recycled seg parent_id=%d: sampled pool microstate.',",
-            "                          seg_id)",
-            "        for segment in segments:",
-            "            d = restart_data[segment.parent_id]",
-            "            segment.data['restart_state']   = d['restart_state']",
-            "            segment.data['pool_microstate'] = d['pool_microstate']",
-        ]
-        full_text = "\n".join(lines)
-        with open("restart_plugin.py", "w") as f:
-            f.write(full_text)
+        """restart_plugin.py, the same for every simulation: copied from webng/assets."""
+        self._copy_asset("restart_plugin.py")
 
 
     def _write_mabl_driver(self):
@@ -1842,62 +1280,11 @@ class weConvert:
 
     def _write_auxfuncs(self):
         """
-        auxilliary function, by default we want to avoid the first point because that's
-        time in BNG output
+        aux_functions.py (the executable propagator's pcoord loader, which
+        skips the time column of BNG output), the same for every simulation:
+        copied from webng/assets.
         """
-        lines = [
-            "#!/usr/bin/env python",
-            "import numpy, os, sys",
-            "def pcoord_loader(fieldname, coord_filename, segment, single_point=False):",
-            "    pcoord = numpy.loadtxt(coord_filename, dtype = numpy.float32)",
-            "    raw_shape = pcoord.shape",
-            "    # numpy.loadtxt silently collapses to a 1D array whenever the",
-            "    # file has exactly one row OR exactly one column -- don't",
-            "    # assume 2D just because a full trajectory was requested (or",
-            "    # 1D just because a single point was). Force 2D explicitly,",
-            "    # then slice consistently regardless of how many rows loaded.",
-            "    pcoord = numpy.atleast_2d(pcoord)",
-            "    if not single_point:",
-            "        segment.pcoord = pcoord[:, 1:]",
-            "    else:",
-            "        segment.pcoord = pcoord[-1, 1:]",
-            "    # DEBUG: every shell-level check upstream (run_network exit code,",
-            "    # seg.gdat non-empty, seg.gdat has non-comment data rows) has",
-            "    # passed, yet segments still end up with an empty pcoord -- this",
-            "    # traces exactly what this function sees and produces.",
-            "    # NOTE: unconditional for now -- pcoord_loader runs inside the",
-            "    # parent w_run process itself (it's a Python callable, not a",
-            "    # subprocess), so SEG_DEBUG/PROPAGATION_DEBUG (which west.cfg only",
-            "    # injects into spawned child processes like runseg.sh) are not",
-            "    # actually set in this process's os.environ -- gating on them",
-            "    # here silently produced zero output. Remove this print once the",
-            "    # root cause is found.",
-            "    if True:",
-            "        sys.stderr.write(",
-            "            'pcoord_loader: coord_filename={} single_point={} '"
-            "            'raw_loadtxt_shape={} after_atleast_2d_shape={} '"
-            "            'final_pcoord_shape={}\\n'.format(",
-            "                coord_filename, single_point, raw_shape, pcoord.shape,",
-            "                segment.pcoord.shape",
-            "            )",
-            "        )",
-            "        try:",
-            "            with open(coord_filename) as fh:",
-            "                content = fh.read()",
-            "            sys.stderr.write(",
-            "                '--- {} contents ---\\n{}\\n--- end {} ---\\n'.format(",
-            "                    coord_filename, content, coord_filename",
-            "                )",
-            "            )",
-            "        except Exception as e:",
-            "            sys.stderr.write(",
-            "                'could not read {} for debug: {}\\n'.format(coord_filename, e)",
-            "            )",
-        ]
-
-        full_text = "\n".join(lines)
-        with open("aux_functions.py", "w") as f:
-            f.write(full_text)
+        self._copy_asset("aux_functions.py")
 
     def _write_bstatestxt(self, n=1):
         lines = ["{} 1 {}.net\n".format(i, i) for i in range(n)]
@@ -1906,59 +1293,20 @@ class weConvert:
 
     def _write_getpcoord_sh(self):
         """
-        the pcoord acquiring script for the inital center
+        westpa_scripts/get_pcoord.sh, the pcoord script for the initial
+        center, the same for every simulation: copied from webng/assets.
         """
-        lines = [
-            "#!/bin/bash\n",
-            'if [ -n "$SEG_DEBUG" ] ; then',
-            "  set -x",
-            "  env | sort",
-            "fi",
-            "cd $WEST_SIM_ROOT",
-            # get_pcoord.sh is only ever used for single-point pcoord
-            # acquisition (basis states, gen_istate) — never for a full
-            # segment trajectory (that's runseg.sh's job). init.gdat can
-            # have multiple rows (BNG's own probe simulation may use
-            # several timepoints), so grab only the last/current one;
-            # cat-ing the whole file here fed the single_point branch of
-            # aux_functions.pcoord_loader a 2D array when it expects a
-            # single 1D row, causing a pcoord shape mismatch.
-            "tail -n 1 bngl_conf/init.gdat > $WEST_PCOORD_RETURN",
-            'if [ -n "$SEG_DEBUG" ] ; then',
-            "  head -v $WEST_PCOORD_RETURN",
-            "fi",
-        ]
         # OSDEPEND: EXECUTABLE - This won't work on Windows powershell
-
-        full_text = "\n".join(lines)
-        with open("westpa_scripts/get_pcoord.sh", "w") as f:
-            f.write(full_text)
-        os.chmod("westpa_scripts/get_pcoord.sh", 0o764)
+        self._copy_asset("get_pcoord.sh", "westpa_scripts/get_pcoord.sh", mode=0o764)
 
     def _write_postiter_sh(self):
         """
-        a basic post-iteration script that deletes iterations that are
-        older than 3 iterations
+        westpa_scripts/post_iter.sh, a post-iteration script that deletes
+        iterations older than 3 iterations, the same for every simulation:
+        copied from webng/assets.
         """
-        lines = [
-            "#!/bin/bash",
-            'if [ -n "$SEG_DEBUG" ] ; then',
-            "    set -x",
-            "    env | sort",
-            "fi",
-            "cd $WEST_SIM_ROOT || exit 1",
-            "if [[ $WEST_CURRENT_ITER -gt 3 ]];then",
-            '  PREV_ITER=$(printf "%06d" $((WEST_CURRENT_ITER-3)))',
-            "  rm -rf ${WEST_SIM_ROOT}/traj_segs/${PREV_ITER}",
-            "  rm -f  seg_logs/${PREV_ITER}-*.log",
-            "fi",
-        ]
         # OSDEPEND: EXECUTABLE - This won't work on Windows powershell
-
-        full_text = "\n".join(lines)
-        with open("westpa_scripts/post_iter.sh", "w") as f:
-            f.write(full_text)
-        os.chmod("westpa_scripts/post_iter.sh", 0o764)
+        self._copy_asset("post_iter.sh", "westpa_scripts/post_iter.sh", mode=0o764)
 
     def _write_initsh(self, traj=True):
         """
