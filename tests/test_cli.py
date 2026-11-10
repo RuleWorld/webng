@@ -22,7 +22,7 @@ import yaml
 from pytest import raises
 
 from webng.main import weBNGTest
-from conftest import requires_bng_lib, BNG_LIB_LOADABLE, TESTS_DIR, run_and_check
+from conftest import requires_bng_lib, requires_ezgillespz, BNG_LIB_LOADABLE, TESTS_DIR, run_and_check
 
 tfold = TESTS_DIR
 
@@ -99,6 +99,7 @@ class TestSetupAndRunByPropagator:
             "executable",
             "libRoadRunner",
             pytest.param("bng", marks=requires_bng_lib),
+            pytest.param("ezgillespz", marks=requires_ezgillespz),
         ],
     )
     def test_setup_and_run(self, propagator_type):
@@ -149,12 +150,31 @@ class TestSetupAndRunByPropagator:
             # cryptic "-o: command not found" (exit 127).
             run_and_check(["bash", "-c", "source env.sh && ./init.sh"], "init.sh")
             run_and_check(["bash", "-c", "source env.sh && w_run --serial"], "w_run --serial")
+            if propagator_type == "ezgillespz":
+                self._check_ezgillespz_west_h5(opts)
         finally:
             os.chdir(tfold)
             if os.path.isfile(fpath):
                 os.remove(fpath)
             if os.path.isdir(opath):
                 shutil.rmtree(opath)
+
+    @staticmethod
+    def _check_ezgillespz_west_h5(opts):
+        """The run went the distance and stored what the propagator records."""
+        import h5py
+        import numpy as np
+        n_iter = opts["sampling_options"]["max_iter"]
+        plen = opts["sampling_options"]["pcoord_length"]
+        with h5py.File("west.h5", "r") as f:
+            assert int(f.attrs["west_current_iteration"]) == n_iter + 1
+            it = f["iterations/iter_{:08d}".format(n_iter)]
+            n_segs = len(it["seg_index"])
+            assert it["pcoord"].shape == (n_segs, plen + 1, len(opts["propagator_options"]["pcoords"]))
+            seeds = it["auxdata/seed"][()]
+            assert (seeds > 2 ** 20).all()           # whole seeds, not scaleoffset's 4 bits
+            assert len(np.unique(seeds)) == 1        # one batch per iteration
+            assert (it["auxdata/events"][()] > 0).all()
 
 
 # Kept for parity with the original test file's naming/behavior — exercises

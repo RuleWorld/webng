@@ -1,17 +1,31 @@
 """
-Unit tests for the propagator writer methods in weConvert: the generated
-propagator scripts and west.cfg blocks for each of the three
-propagator_type options (executable, libRoadRunner, bng).
+Unit tests for the propagators: the propagator scripts and west.cfg blocks
+weConvert writes for each propagator_type (executable, libRoadRunner, bng,
+ezgillespz), and the propagators' own behavior.
 
-These test the *generated output*, not a running simulation — each test
-instantiates a bare weConvert (bypassing YAML loading), calls a writer
+Most of these test the *generated output*, not a running simulation — each
+test instantiates a bare weConvert (bypassing YAML loading), calls a writer
 method, and checks the file it produced. This catches the kind of bug we
 found by hand during development: wrong config namespace, stale method
 names after a rename, syntactically invalid generated Python, etc.
+
+The ezgillespz section also drives the propagator itself with fake WESTPA
+segments and checks its statistics against exact answers and against libssa.
+Those tests need ezgillespz installed (it is not on PyPI, so CI skips them);
+the ones that only check what `webng setup` writes run everywhere.
 """
 import ast
+import json
+import math
+import subprocess
+import sys
 
+import numpy as np
 import pytest
+import yaml
+
+from conftest import make_bare_weconvert, requires_bng_lib, requires_ezgillespz
+from webng.core.weConvert import weConvert
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +261,7 @@ class TestWallclock:
         ("_bng_westcfg", "bng"),
         ("_libRR_westcfg", "libRoadRunner"),
         ("_executable_westcfg", "executable"),
+        ("_ezgillespz_westcfg", "ezgillespz"),
     ])
     def test_every_west_cfg_uses_it(self, bare_weconvert, tmp_path, monkeypatch, writer, propagator):
         monkeypatch.chdir(tmp_path)
@@ -303,3 +318,512 @@ class TestResolveBngLibPath:
         wc = bare_weconvert(libssa_path=None)
         wc._copy_bng_lib()
         assert (tmp_path / "libssa.so").read_bytes() == open(wc._resolve_bng_lib_path(), "rb").read()
+
+
+# ---------------------------------------------------------------------------
+# ezgillespz — what `webng setup` writes (no ezgillespz needed)
+# ---------------------------------------------------------------------------
+
+EZG_ADAPTIVE = dict(propagator_type="ezgillespz", binning_style="adaptive", do_recycling=False,
+                    traj_per_bin=10, max_centers=300, center_freq=1,
+                    block_size=weConvert.EZGILLESPZ_BLOCK_SIZE)
+
+
+def ezg_weconvert(**attrs):
+    return make_bare_weconvert(**{**EZG_ADAPTIVE, **attrs})
+
+
+class TestWriteEzgillespzPropagator:
+    def test_copies_valid_python(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        ezg_weconvert()._write_ezgillespzPropagator()
+        src = (tmp_path / "ezgillespz_propagator.py").read_text()
+        ast.parse(src)
+        assert "class ezgillespzPropagator(WESTPropagator):" in src
+        assert "SECTION = (\"west\", \"ezgillespz\")" in src
+        assert "bstate_lookup_debug" not in src          # the first draft's always-on debug log
+
+    def test_setup_dispatch(self, tmp_path, monkeypatch):
+        """write_static_files routes ezgillespz to its own writers, never bng's."""
+        calls = []
+        wc = ezg_weconvert()
+        for name in ["_write_envsh", "_write_auxfuncs", "_write_runsh", "_write_restartDriver",
+                     "_write_ezgillespzPropagator"]:
+            monkeypatch.setattr(wc, name, lambda *a, _n=name, **k: calls.append(_n))
+        for name in ["_write_bngPropagator", "_copy_bng_lib", "_write_librrPropagator"]:
+            monkeypatch.setattr(wc, name, lambda *a, _n=name, **k: pytest.fail(_n + " called"))
+        monkeypatch.chdir(tmp_path)
+        wc.write_static_files()
+        assert {"_write_restartDriver", "_write_ezgillespzPropagator"} <= set(calls)
+
+
+class TestEzgillespzWestcfg:
+    def _cfg(self, tmp_path, monkeypatch, **attrs):
+        monkeypatch.chdir(tmp_path)
+        ezg_weconvert(**attrs)._ezgillespz_westcfg()
+        text = (tmp_path / "west.cfg").read_text()
+        return text, yaml.safe_load(text)["west"]
+
+    def test_propagator_and_namespace(self, tmp_path, monkeypatch):
+        text, cfg = self._cfg(tmp_path, monkeypatch)
+        assert cfg["propagation"]["propagator"] == "ezgillespz_propagator.ezgillespzPropagator"
+        assert cfg["propagation"]["block_size"] == weConvert.EZGILLESPZ_BLOCK_SIZE
+        init = cfg["ezgillespz"]["init"]
+        assert init["net_file"] == "./bngl_conf/init.net"
+        assert init["final_time_step"] == 50.0 and init["num_time_step"] == 3   # tau=50, plen=2
+        assert (init["device"], init["kind"], init["headroom_bits"], init["thin"], init["seed"]) == \
+            ("cpu", "compact", 8, False, None)
+        assert cfg["ezgillespz"]["data"]["pcoords"] == ["NANOG", "GATA6"]
+        assert "librr" not in text and "  bng:" not in text
+
+    def test_options_reach_west_cfg(self, tmp_path, monkeypatch):
+        _, cfg = self._cfg(tmp_path, monkeypatch, ezg_device="gpu", ezg_kind="generated",
+                           ezg_headroom_bits=12, ezg_thin=True, ezg_seed=1234)
+        init = cfg["ezgillespz"]["init"]
+        assert (init["device"], init["kind"], init["headroom_bits"], init["thin"], init["seed"]) == \
+            ("gpu", "generated", 12, True, 1234)
+
+    def test_restart_plugin_and_adaptive_voronoi(self, tmp_path, monkeypatch):
+        _, cfg = self._cfg(tmp_path, monkeypatch)
+        plugins = [p["plugin"] for p in cfg["plugins"]]
+        assert "restart_plugin.RestartDriver" in plugins
+        assert "westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver" in plugins
+
+    def test_mabl_uses_its_driver(self, tmp_path, monkeypatch):
+        _, cfg = self._cfg(tmp_path, monkeypatch, binning_style="mabl")
+        assert cfg["drivers"]["we_driver"] == "MABL_driver.MABLDriver"
+
+    def test_gen_istates_reflects_recycling(self, tmp_path, monkeypatch):
+        for do_recycling in (True, False):
+            _, cfg = self._cfg(tmp_path, monkeypatch, do_recycling=do_recycling)
+            assert cfg["propagation"]["gen_istates"] is do_recycling
+
+
+@pytest.mark.parametrize("writer, propagator", [
+    ("_bng_westcfg", "bng"),
+    ("_libRR_westcfg", "libRoadRunner"),
+    ("_ezgillespz_westcfg", "ezgillespz"),
+])
+def test_seed_dataset_is_not_scaleoffset(tmp_path, monkeypatch, writer, propagator):
+    """scaleoffset: 4 on an integer dataset keeps only 4 bits: every recorded seed was lost."""
+    monkeypatch.chdir(tmp_path)
+    getattr(ezg_weconvert(propagator_type=propagator), writer)()
+    datasets = yaml.safe_load((tmp_path / "west.cfg").read_text())["west"]["data"]["datasets"]
+    assert not any(d["name"] == "seed" and "scaleoffset" in d for d in datasets)
+
+
+def test_runsh_work_manager(tmp_path, monkeypatch):
+    """ezgillespz runs each iteration in one process; the others fan out over processes."""
+    monkeypatch.chdir(tmp_path)
+    ezg_weconvert()._write_runsh()
+    assert 'w_run --work-manager serial "$@"' in (tmp_path / "run.sh").read_text()
+    make_bare_weconvert(propagator_type="bng")._write_runsh()
+    assert 'w_run --work-manager processes "$@"' in (tmp_path / "run.sh").read_text()
+
+
+class TestEzgillespzOptions:
+    """propagator_options parsing, through weConvert's real __init__."""
+
+    def _parse(self, tmp_path, monkeypatch, prop=None, binning=None):
+        monkeypatch.chdir(tmp_path)
+        opts = {
+            "propagator_options": {"propagator_type": "ezgillespz", "pcoords": ["A", "B"], **(prop or {})},
+            "path_options": {"bngl_file": "x.bngl", "sim_name": "sim"},
+            "sampling_options": {"tau": 2, "dimensions": 2, "pcoord_length": 10},
+            "binning_options": {"style": "adaptive", **(binning or {})},
+        }
+        path = tmp_path / "opts.yaml"
+        path.write_text(yaml.safe_dump(opts))
+
+        class Args:
+            pass
+        args = Args()
+        args.opts = str(path)
+        return weConvert(args)
+
+    def test_defaults(self, tmp_path, monkeypatch):
+        wc = self._parse(tmp_path, monkeypatch)
+        assert (wc.ezg_device, wc.ezg_kind, wc.ezg_headroom_bits, wc.ezg_thin, wc.ezg_seed) == \
+            ("cpu", "compact", 8, False, None)
+        assert wc.pcoord_list == ["A", "B"]
+        assert wc.block_size == weConvert.EZGILLESPZ_BLOCK_SIZE    # one batch per iteration
+
+    def test_template_block_size_does_not_cap_batches(self, tmp_path, monkeypatch):
+        """Every template writes binning_options.block_size: 10; with
+        ezgillespz that must not turn into 10-walker batches."""
+        wc = self._parse(tmp_path, monkeypatch, binning={"block_size": 10})
+        assert wc.block_size == weConvert.EZGILLESPZ_BLOCK_SIZE
+
+    def test_batch_size_from_propagator_options(self, tmp_path, monkeypatch):
+        wc = self._parse(tmp_path, monkeypatch, prop={"block_size": 50000}, binning={"block_size": 10})
+        assert wc.block_size == 50000
+
+    def test_bad_batch_size_exits(self, tmp_path, monkeypatch):
+        with pytest.raises(SystemExit, match="block_size"):
+            self._parse(tmp_path, monkeypatch, prop={"block_size": 0})
+
+    def test_options(self, tmp_path, monkeypatch):
+        wc = self._parse(tmp_path, monkeypatch, prop={"device": "GPU", "seed": 7, "thin": True})
+        assert (wc.ezg_device, wc.ezg_seed, wc.ezg_thin) == ("gpu", 7, True)
+
+    def test_bad_device_exits(self, tmp_path, monkeypatch):
+        with pytest.raises(SystemExit, match="device"):
+            self._parse(tmp_path, monkeypatch, prop={"device": "tpu"})
+
+    def test_unknown_propagator_type_exits(self, tmp_path, monkeypatch):
+        with pytest.raises(SystemExit, match="propagator_type"):
+            self._parse(tmp_path, monkeypatch, prop={"propagator_type": "ezgilespz"})
+
+
+# ---------------------------------------------------------------------------
+# ezgillespz — the propagator itself (needs ezgillespz)
+# ---------------------------------------------------------------------------
+
+# Immigration-death in A (0 -> A at k1, A -> 0 at k2 * A); B and C never react.
+# From A(0) = a, A(t) = Binomial(a, p) + Poisson(k1/k2 (1 - p)) with p = exp(-k2 t).
+BD_NET = """\
+begin parameters
+    1 k1 50.0
+    2 k2 0.5
+end parameters
+begin species
+    1 A() {a}
+    2 B() {b}
+    3 C() {c}
+end species
+begin reactions
+    1 0 1 k1
+    2 1 0 k2
+end reactions
+begin groups
+    1 Atot 1
+    2 Weighted 2*2,3*3
+end groups
+"""
+K1, K2 = 50.0, 0.5
+
+# Yule process: A -> A + A at rate k * A. From A(0) = a, E[A(t)] = a e^{kt},
+# Var = a e^{kt} (e^{kt} - 1). The total rate grows e^{kt}-fold in one launch.
+YULE_NET = """\
+begin parameters
+    1 k 1.0
+end parameters
+begin species
+    1 A() {a}
+end species
+begin reactions
+    1 1 1,1 k
+end reactions
+begin groups
+    1 Atot 1
+end groups
+"""
+
+# Dimerization: two identical reactants, where propensity conventions differ
+# between simulators if they are going to (BNG puts the 1/2 in the .net rate).
+DIMER_NET = """\
+begin parameters
+    1 kf 0.01
+    2 kr 1.0
+end parameters
+begin species
+    1 A() 200
+    2 B() 0
+end species
+begin reactions
+    1 1,1 2 0.5*kf
+    2 2 1,1 kr
+end reactions
+begin groups
+    1 Atot 1
+    2 Btot 2
+end groups
+"""
+
+
+class EzgSeg:
+    SEG_STATUS_COMPLETE = 2
+
+    def __init__(self, seg_id, n_iter, parent_id, data=None):
+        self.seg_id, self.n_iter, self.parent_id = seg_id, n_iter, parent_id
+        self.data = data or {}
+
+
+class EzgState:
+    def __init__(self, auxref=None, basis_state_id=None):
+        self.auxref, self.basis_state_id = auxref, basis_state_id
+
+
+@pytest.fixture
+def ezg_module():
+    return weConvert._ezgillespz_module()
+
+
+def make_ezg_propagator(mod, tmp_path, net=BD_NET, init=(1, 2, 3), num_ts=11, tau=2.0,
+                        pcoords=("Atot", "Weighted"), seed=12345, headroom_bits=8, bstates=None,
+                        device="cpu"):
+    """An ezgillespzPropagator without WESTPA's rc: attributes set as __init__ would."""
+    a, b, c = (tuple(init) + (0, 0, 0))[:3]
+    (tmp_path / "init.net").write_text(net.format(a=a, b=b, c=c))
+    for name, counts in (bstates or {}).items():
+        (tmp_path / name).write_text(net.format(**dict(zip("abc", counts))))
+    P = mod.ezgillespzPropagator.__new__(mod.ezgillespzPropagator)
+    P.net_file = str(tmp_path / "init.net")
+    P.t_start, P.t_end, P.num_ts = 0.0, float(tau), num_ts
+    P.pcoord_keys = list(pcoords)
+    P._setup(device=device, kind="compact", headroom_bits=headroom_bits, thin=False, seed=seed)
+    return P
+
+
+@requires_ezgillespz
+class TestEzgillespzStartStates:
+    """The same start-state contract as bng_propagator.py (TestBngPropagatorStartStates)."""
+
+    def _prop(self, ezg_module, tmp_path, monkeypatch, num_ts=11):
+        monkeypatch.chdir(tmp_path)
+        P = make_ezg_propagator(ezg_module, tmp_path, num_ts=num_ts,
+                                bstates={"SC.net": (800, 0, 0), "IM.net": (100, 5, 5)})
+        P.basis_states = {0: EzgState(auxref="SC.net"), 1: EzgState(auxref="IM.net")}
+        P.initial_states = {0: EzgState(basis_state_id=0), 1: EzgState(basis_state_id=0),
+                            2: EzgState(basis_state_id=1)}
+        return P
+
+    @pytest.mark.parametrize("num_ts", [2, 11])
+    def test_iteration1_starts_from_basis_states(self, ezg_module, tmp_path, monkeypatch, num_ts):
+        P = self._prop(ezg_module, tmp_path, monkeypatch, num_ts)
+        segs = [EzgSeg(0, 1, -1), EzgSeg(1, 1, -2), EzgSeg(2, 1, -3)]          # SC, SC, IM
+        P.propagate(segs)
+        assert [s.pcoord[0][0] for s in segs] == [800, 800, 100]
+        assert segs[2].pcoord[0][1] == 2 * 5 + 3 * 5                           # weighted observable
+        assert all(s.pcoord.shape == (num_ts, 2) for s in segs)
+        assert all(s.status == EzgSeg.SEG_STATUS_COMPLETE for s in segs)
+
+    def test_continuing_walker_starts_from_restart_state(self, ezg_module, tmp_path, monkeypatch):
+        P = self._prop(ezg_module, tmp_path, monkeypatch)
+        seg = EzgSeg(3, 2, 0, {"restart_state": np.array([42.0, 1.0, 1.0])})
+        P.propagate([seg])
+        assert seg.pcoord[0][0] == 42 and seg.pcoord[0][1] == 5
+        assert list(seg.data["final_state"][1:]) == [1.0, 1.0]                # B, C never react
+        assert seg.pcoord[-1][0] == seg.data["final_state"][0]
+
+    def test_recycled_walkers_use_pool_then_basis_state(self, ezg_module, tmp_path, monkeypatch):
+        """A recycled walker in a later iteration with no pool must start from
+        its own basis state, not the model default (the first draft's bug)."""
+        P = self._prop(ezg_module, tmp_path, monkeypatch)
+        pooled = EzgSeg(4, 3, -3, {"restart_state": [-1, -1, -1], "pool_microstate": np.array([7.0, 0, 0])})
+        unpooled = EzgSeg(5, 3, -3, {"restart_state": [-1, -1, -1], "pool_microstate": None})
+        P.propagate([pooled, unpooled])
+        assert pooled.pcoord[0][0] == 7
+        assert unpooled.pcoord[0][0] == 100 and unpooled.pcoord[0][1] == 25   # IM, not init.net
+        assert "pool_microstate" not in pooled.data
+
+    def test_continuing_walker_without_restart_state_raises(self, ezg_module, tmp_path, monkeypatch):
+        P = self._prop(ezg_module, tmp_path, monkeypatch)
+        with pytest.raises(RuntimeError, match="restart_state"):
+            P.propagate([EzgSeg(6, 2, 0, {})])
+
+    def test_basis_state_pcoord_comes_from_its_net_file(self, ezg_module, tmp_path, monkeypatch):
+        P = self._prop(ezg_module, tmp_path, monkeypatch)
+        bstate = EzgState(auxref="SC.net")
+        P.get_pcoord(bstate)
+        assert list(bstate.pcoord) == [800, 0]
+        assert list(P.gen_istate(EzgState(auxref="IM.net"), EzgState()).pcoord) == [100, 25]
+
+    def test_negative_restart_counts_are_refused(self, ezg_module, tmp_path, monkeypatch):
+        P = self._prop(ezg_module, tmp_path, monkeypatch)
+        with pytest.raises(ValueError, match=">= 0"):
+            P.propagate([EzgSeg(7, 2, 0, {"restart_state": np.array([-3.0, 0, 0])})])
+
+    def test_unknown_pcoord_is_an_error(self, ezg_module, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        with pytest.raises(ValueError, match="not an observable"):
+            make_ezg_propagator(ezg_module, tmp_path, pcoords=("Atot", "Nope"))
+
+
+@requires_ezgillespz
+def test_ezgillespz_seeds_recorded_and_runs_reproducible(ezg_module, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    out = []
+    for _ in range(2):
+        P = make_ezg_propagator(ezg_module, tmp_path, seed=99)
+        segs = [EzgSeg(i, 2, 0, {"restart_state": np.array([10.0, 0, 0])}) for i in range(50)]
+        P.propagate(segs)
+        out.append(segs)
+    a, b = out
+    assert len({s.data["seed"] for s in a}) == 1                   # one base seed per batch
+    assert [s.data["seed_row"] for s in a] == list(range(50))
+    assert all(np.array_equal(x.pcoord, y.pcoord) for x, y in zip(a, b))
+    assert all(x.data["events"] > 0 for x in a)
+    assert len({float(s.data["final_state"][0]) for s in a}) > 1   # walkers get different streams
+
+
+def _z(sample_mean, mean, var, n):
+    return abs(sample_mean - mean) / math.sqrt(var / n)
+
+
+@requires_ezgillespz
+class TestEzgillespzAgainstExactSolutions:
+    @pytest.mark.parametrize("num_ts", [2, 11])
+    def test_immigration_death_distribution(self, ezg_module, tmp_path, monkeypatch, num_ts):
+        """Mean and variance of A(t) against the exact law, with the segment
+        split into num_ts - 1 launches (so chaining launches is tested too)."""
+        monkeypatch.chdir(tmp_path)
+        n, a0, t = 20000, 10, 2.0
+        P = make_ezg_propagator(ezg_module, tmp_path, init=(a0, 0, 0), num_ts=num_ts, tau=t)
+        segs = [EzgSeg(i, 2, 0, {"restart_state": np.array([a0, 0.0, 0.0])}) for i in range(n)]
+        P.propagate(segs)
+        A = np.array([s.data["final_state"][0] for s in segs])
+        p = math.exp(-K2 * t)
+        mean = a0 * p + K1 / K2 * (1 - p)
+        var = a0 * p * (1 - p) + K1 / K2 * (1 - p)
+        assert _z(A.mean(), mean, var, n) < 5
+        assert abs(A.var() - var) / (var * math.sqrt(2.0 / n)) < 5
+        if num_ts > 2:      # an intermediate point is a real state on the way, not a copy of the end
+            mid = np.array([s.pcoord[num_ts // 2][0] for s in segs])
+            pm = math.exp(-K2 * t / 2)
+            assert _z(mid.mean(), a0 * pm + K1 / K2 * (1 - pm), a0 * pm * (1 - pm) + K1 / K2 * (1 - pm), n) < 5
+
+    def test_overflow_and_near_limit_recovery(self, ezg_module, tmp_path, monkeypatch):
+        """With no headroom, a Yule process outgrows the fixed-point scale within
+        a launch. The runner must make the scale coarser and carry on, and the
+        result must still follow the exact law."""
+        monkeypatch.chdir(tmp_path)
+        n, a0, t = 4000, 200, 2.0
+        P = make_ezg_propagator(ezg_module, tmp_path, net=YULE_NET, init=(a0,), num_ts=3, tau=t,
+                                pcoords=("Atot",), headroom_bits=0)
+        segs = [EzgSeg(i, 2, 0, {"restart_state": np.array([float(a0)])}) for i in range(n)]
+        P.propagate(segs)
+        assert P._runner.rescales >= 1 and P._runner.headroom > 0
+        A = np.array([s.data["final_state"][0] for s in segs])
+        mean, var = a0 * math.exp(t), a0 * math.exp(t) * (math.exp(t) - 1)
+        assert _z(A.mean(), mean, var, n) < 5
+
+
+LIBSSA_RUNNER = r"""
+import ctypes, json, sys
+import numpy as np
+lib = ctypes.CDLL(sys.argv[1])
+P = ctypes.POINTER(ctypes.c_double)
+lib.ssa_init.argtypes = [ctypes.c_char_p, ctypes.c_int, ctypes.c_int]
+lib.ssa_set_state.argtypes = [P, ctypes.c_int]
+lib.ssa_reseed.argtypes = [ctypes.c_int]
+lib.ssa_run.argtypes = [ctypes.c_double, ctypes.c_double]
+lib.ssa_get_state.argtypes = [P, ctypes.c_int]
+lib.ssa_get_n_species.restype = ctypes.c_int
+net, n, t = sys.argv[2], int(sys.argv[3]), float(sys.argv[4])
+assert lib.ssa_init(net.encode(), 1, 1) == 0
+ns = lib.ssa_get_n_species()
+x0 = np.array([200.0, 0.0]); buf = np.zeros(ns)
+out = []
+for i in range(n):
+    lib.ssa_set_state(x0.ctypes.data_as(P), ns)
+    lib.ssa_reseed(i + 1)
+    assert lib.ssa_run(0.0, t) == 0
+    lib.ssa_get_state(buf.ctypes.data_as(P), ns)
+    out.append(buf[0])
+with open(sys.argv[5], "w") as f:      # libssa writes its own messages to stdout
+    json.dump(out, f)
+"""
+
+
+@requires_ezgillespz
+@requires_bng_lib
+def test_ezgillespz_matches_libssa_on_dimerization(ezg_module, tmp_path, monkeypatch):
+    """ezgillespz and libssa on a network with two identical reactants: the
+    same distribution of A at t = 1 (two-sample z-tests on mean and variance).
+    A factor-of-2 disagreement in the dimerization propensity would move the
+    near-equilibrium mean from about 100 to about 124, some 100 standard
+    errors at this n."""
+    monkeypatch.chdir(tmp_path)
+    n, t = 4000, 1.0
+    (tmp_path / "dimer.net").write_text(DIMER_NET)
+    lib = make_bare_weconvert()._resolve_bng_lib_path()
+    out_json = tmp_path / "libssa_A.json"
+    res = subprocess.run([sys.executable, "-c", LIBSSA_RUNNER, lib, str(tmp_path / "dimer.net"), str(n), str(t),
+                          str(out_json)], capture_output=True, text=True, timeout=300)
+    assert res.returncode == 0, res.stderr
+    A_ssa = np.array(json.loads(out_json.read_text()))
+
+    P = make_ezg_propagator(ezg_module, tmp_path, net=DIMER_NET, num_ts=2, tau=t, pcoords=("Atot", "Btot"))
+    segs = [EzgSeg(i, 2, 0, {"restart_state": np.array([200.0, 0.0])}) for i in range(n)]
+    P.propagate(segs)
+    A_ezg = np.array([s.data["final_state"][0] for s in segs])
+
+    se = math.sqrt(A_ssa.var() / n + A_ezg.var() / n)
+    assert abs(A_ssa.mean() - A_ezg.mean()) / se < 5, (A_ssa.mean(), A_ezg.mean())
+    v1, v2 = A_ssa.var(), A_ezg.var()
+    assert abs(v1 - v2) / math.sqrt(2.0 / n * (v1 ** 2 + v2 ** 2)) < 5, (v1, v2)
+
+
+# ---------------------------------------------------------------------------
+# ezgillespz on a GPU (skipped unless ezgillespz finds a usable CUDA or Metal GPU)
+# ---------------------------------------------------------------------------
+
+# Metal keeps its clock as an integer and divides in single precision, so
+# ezgillespz holds it to a window rather than exact equality with the CPU
+# (its KNOWN_ISSUES #19 measured 99.976-100 % of walkers identical). CUDA must
+# match the CPU exactly: the propagator launches each batch whole, in a fixed
+# walker order, so nothing machine-dependent enters (compare KNOWN_ISSUES #40).
+METAL_MIN_IDENTICAL = 0.999
+
+
+@pytest.fixture(scope="module")
+def gpu_backend():
+    """'cuda' or 'metal'. Checked only when a GPU test runs: on CUDA this
+    initializes the driver, on Metal it compiles ezgillespz's runtime."""
+    gg = pytest.importorskip("ezgillespz")
+    if not gg.gpu_available():
+        pytest.skip("ezgillespz finds no usable CUDA or Metal GPU here")
+    return gg.gpu_backend()
+
+
+@requires_ezgillespz
+class TestEzgillespzOnGpu:
+    def _batch(self, ezg_module, tmp_path, device, n, a0=10, **kw):
+        P = make_ezg_propagator(ezg_module, tmp_path, init=(a0, 0, 0), device=device, seed=2024, **kw)
+        segs = [EzgSeg(i, 2, 0, {"restart_state": np.array([a0, 0.0, 0.0])}) for i in range(n)]
+        P.propagate(segs)
+        return P, segs
+
+    def test_gpu_reproduces_cpu(self, ezg_module, gpu_backend, tmp_path, monkeypatch):
+        """The same batch from the same seed on the CPU and on the GPU, split
+        into 10 launches: CUDA identical walker for walker, Metal within its window."""
+        monkeypatch.chdir(tmp_path)
+        n = 4096
+        _, cpu = self._batch(ezg_module, tmp_path, "cpu", n)
+        _, gpu = self._batch(ezg_module, tmp_path, "gpu", n)
+        same = np.array([np.array_equal(c.pcoord, g.pcoord) and
+                         np.array_equal(c.data["final_state"], g.data["final_state"]) for c, g in zip(cpu, gpu)])
+        ev_cpu = sum(s.data["events"] for s in cpu)
+        ev_gpu = sum(s.data["events"] for s in gpu)
+        print("\n[{}] {} of {} walkers identical to the CPU; events {} vs {}".format(
+            gpu_backend, int(same.sum()), n, ev_gpu, ev_cpu))
+        if gpu_backend == "cuda":
+            assert same.all() and ev_gpu == ev_cpu
+        else:
+            assert same.mean() >= METAL_MIN_IDENTICAL
+            assert abs(ev_gpu - ev_cpu) <= 1e-3 * ev_cpu
+
+    def test_gpu_follows_exact_law(self, ezg_module, gpu_backend, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        n, a0, t = 20000, 10, 2.0
+        _, segs = self._batch(ezg_module, tmp_path, "gpu", n, a0=a0, tau=t)
+        A = np.array([s.data["final_state"][0] for s in segs])
+        p = math.exp(-K2 * t)
+        mean = a0 * p + K1 / K2 * (1 - p)
+        var = a0 * p * (1 - p) + K1 / K2 * (1 - p)
+        assert _z(A.mean(), mean, var, n) < 5
+        assert abs(A.var() - var) / (var * math.sqrt(2.0 / n)) < 5
+
+    def test_gpu_overflow_recovery(self, ezg_module, gpu_backend, tmp_path, monkeypatch):
+        """The overflow flag comes back from the GPU kernel and the runner recovers."""
+        monkeypatch.chdir(tmp_path)
+        n, a0, t = 4000, 200, 2.0
+        P = make_ezg_propagator(ezg_module, tmp_path, net=YULE_NET, init=(a0,), num_ts=3, tau=t,
+                                pcoords=("Atot",), headroom_bits=0, device="gpu")
+        segs = [EzgSeg(i, 2, 0, {"restart_state": np.array([float(a0)])}) for i in range(n)]
+        P.propagate(segs)
+        assert P._runner.rescales >= 1
+        A = np.array([s.data["final_state"][0] for s in segs])
+        mean, var = a0 * math.exp(t), a0 * math.exp(t) * (math.exp(t) - 1)
+        assert _z(A.mean(), mean, var, n) < 5

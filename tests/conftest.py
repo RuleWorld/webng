@@ -87,6 +87,12 @@ def make_bare_weconvert(**attrs):
         gillespie_update_interval=1,
         libssa_path=None,
         max_wallclock="72:00:00",
+        # propagator_type: ezgillespz options (_parse_ezgillespz_opts defaults)
+        ezg_device="cpu",
+        ezg_kind="compact",
+        ezg_headroom_bits=8,
+        ezg_thin=False,
+        ezg_seed=None,
     )
     defaults.update(attrs)
     for k, v in defaults.items():
@@ -116,6 +122,20 @@ def _bng_lib_loadable():
 
 
 BNG_LIB_LOADABLE = _bng_lib_loadable()
+
+try:
+    import ezgillespz  # noqa: F401
+    HAVE_EZGILLESPZ = True
+except ImportError:
+    HAVE_EZGILLESPZ = False
+
+requires_ezgillespz = pytest.mark.skipif(
+    not HAVE_EZGILLESPZ,
+    reason=(
+        "ezgillespz is not installed. It is not on PyPI, so CI skips these; "
+        "install it locally with pip install -e /path/to/ezgillespz."
+    ),
+)
 
 requires_bng_lib = pytest.mark.skipif(
     not BNG_LIB_LOADABLE,

@@ -73,7 +73,10 @@ class weConvert:
         self.propagator_type = self._getd(
             propagator_options, "propagator_type", default="bng"
         )
-        if self.propagator_type in ("libRoadRunner", "bng"):
+        if self.propagator_type not in self.PROPAGATOR_TYPES:
+            sys.exit("propagator_options.propagator_type must be one of {}, got {!r}".format(
+                ", ".join(self.PROPAGATOR_TYPES), self.propagator_type))
+        if self.propagator_type in ("libRoadRunner", "bng", "ezgillespz"):
             self.pcoord_list = self._getd(propagator_options, "pcoords")
         if self.propagator_type == "bng":
             self.libssa_path = self._getd(
@@ -82,6 +85,8 @@ class weConvert:
             self.gillespie_update_interval = self._getd(
                 propagator_options, "gillespie_update_interval", default=1
             )
+        if self.propagator_type == "ezgillespz":
+            self._parse_ezgillespz_opts(propagator_options)
 
         # we need to find WESTPA and BNG
         self.system = platform.system()
@@ -122,6 +127,13 @@ class weConvert:
             self.boundaries   = self._getd(binning_options, "boundaries")
             self.traj_per_bin = self._getd(binning_options, "traj_per_bin", default=10)
             self.block_size   = self._getd(binning_options, "block_size",   default=10)
+        if self.propagator_type == "ezgillespz":
+            # The ezgillespz propagator runs each block of segments as one
+            # batch. binning_options.block_size (segments per worker task,
+            # 10 in every template) would cap batches at 10 walkers, so it
+            # is not used: the batch size is propagator_options.block_size,
+            # by default the whole iteration.
+            self.block_size = self.ezg_block_size
 
         # recycling options
         recycling_opts = opts_dict.get("recycling", None)
@@ -160,6 +172,40 @@ class weConvert:
             self.recycle_region = None
             self.bs_traj_length = 5000
     
+    PROPAGATOR_TYPES = ("bng", "ezgillespz", "libRoadRunner", "executable")
+    EZGILLESPZ_DEVICES = ("cpu", "gpu", "cuda", "metal")
+    # larger than any iteration: WESTPA then hands the ezgillespz propagator
+    # the whole iteration in one propagate() call
+    EZGILLESPZ_BLOCK_SIZE = 1000000
+
+    def _parse_ezgillespz_opts(self, propagator_options):
+        """
+        propagator_options for propagator_type: ezgillespz (all optional):
+          device         cpu (default), gpu (CUDA or Metal, whichever the
+                         machine has), cuda or metal
+          kind           ezgillespz engine, default compact
+          headroom_bits  fixed-point headroom, default 8
+          thin           true: exact rate constants by thinning, default false
+          seed           integer for a reproducible run, default none
+          block_size     most walkers per batch (e.g. to fit GPU memory);
+                         default: the whole iteration in one batch.
+                         binning_options.block_size is not used.
+        """
+        device = str(self._getd(propagator_options, "device", default="cpu")).lower()
+        if device not in self.EZGILLESPZ_DEVICES:
+            sys.exit("propagator_options.device must be one of {}, got {!r}".format(
+                ", ".join(self.EZGILLESPZ_DEVICES), device))
+        self.ezg_device = device
+        self.ezg_kind = self._getd(propagator_options, "kind", default="compact")
+        self.ezg_headroom_bits = int(self._getd(propagator_options, "headroom_bits", default=8))
+        self.ezg_thin = bool(self._getd(propagator_options, "thin", default=False))
+        seed = self._getd(propagator_options, "seed", default=None, required=False)
+        self.ezg_seed = None if seed is None else int(seed)
+        block = self._getd(propagator_options, "block_size", default=None, required=False)
+        self.ezg_block_size = self.EZGILLESPZ_BLOCK_SIZE if block is None else int(block)
+        if self.ezg_block_size < 1:
+            sys.exit("propagator_options.block_size must be a positive integer")
+
     # Helper functions for parsing options and getting paths
     def _get_westpa_path(self):
         # full path to library
@@ -365,6 +411,8 @@ class weConvert:
 
         if self.propagator_type == "bng":
             self._sample_basis_states_bng(init_net, groups, n_species)
+        elif self.propagator_type == "ezgillespz":
+            self._sample_basis_states_ezgillespz(init_net, groups, n_species)
         else:
             self._sample_basis_states_libRR(init_net, groups, n_species)
 
@@ -400,7 +448,60 @@ class weConvert:
             err = lib.ssa_get_last_error().decode()
             sys.exit("[recycling] ssa_run_multi failed: {}".format(err))
         all_states = np.ctypeslib.as_array(buf).reshape(num_ts, n_species)
+        self._write_microstate_pool(all_states, init_net, groups, n_species)
 
+    @staticmethod
+    def _ezgillespz_module():
+        """
+        The ezgillespz propagator module bundled with WEBNG
+        (webng/assets/ezgillespz_propagator.py), imported from its file:
+        setup-time sampling uses the same engine handling as the run.
+        """
+        import importlib.util
+        path = os.path.join(weConvert._bng_assets_dir(), "ezgillespz_propagator.py")
+        spec = importlib.util.spec_from_file_location("webng_ezgillespz_propagator", path)
+        mod = importlib.util.module_from_spec(spec)
+        try:
+            spec.loader.exec_module(mod)
+        except ImportError as e:
+            sys.exit("[ezgillespz] {}".format(e))
+        return mod
+
+    def _sample_basis_states_ezgillespz(self, init_net, groups, n_species):
+        """
+        Basis-state sampling with ezgillespz on the CPU: one walker from
+        init.net, recorded every time unit for traj_length time units (the
+        same frames as the bng sampler), then filtered by basis_region.
+        """
+        mod = self._ezgillespz_module()
+        model = mod.gg.load_net(init_net)
+        if model.ns != n_species:
+            sys.exit(
+                "[recycling] species count mismatch: .net file has {} but "
+                "ezgillespz reads {}.".format(n_species, model.ns)
+            )
+        runner = mod.Runner(model, device="cpu", kind=self.ezg_kind,
+                            headroom_bits=self.ezg_headroom_bits, thin=self.ezg_thin)
+        rng = np.random.default_rng(self.ezg_seed)
+        print("[recycling] Running sampling trajectory ({} steps) via ezgillespz …".format(
+            self.bs_traj_length))
+        num_ts = self.bs_traj_length + 1
+        all_states = np.empty((num_ts, n_species), dtype=np.float64)
+        X = mod.as_counts(model.x0, n_species, init_net)[None, :]
+        all_states[0] = X[0]
+        for t in range(1, num_ts):
+            X, _ = runner.run(X, int(rng.integers(1, 2 ** 62)), 1.0)
+            all_states[t] = X[0]
+        self._write_microstate_pool(all_states, init_net, groups, n_species)
+
+    def _write_microstate_pool(self, all_states, init_net, groups, n_species):
+        """
+        Keep the sampled frames (rows of all_states: species counts) that
+        satisfy basis_region and write them to bstates/microstate_pool.dat,
+        with the placeholder 0.net and bstates.txt w_init needs. Shared by
+        the bng and ezgillespz samplers.
+        """
+        num_ts = len(all_states)
         bstates_dir = "bstates"
 
         # compute each basis_region observable as the weighted sum of its
@@ -1137,6 +1238,23 @@ class weConvert:
         with open("bng_propagator.py", "w") as f:
             f.write(full_text)
 
+    def _write_ezgillespzPropagator(self):
+        """
+        Copies the ezgillespz propagator (webng/assets/ezgillespz_propagator.py)
+        into the simulation root. It has nothing to template: its settings come
+        from west.cfg's west.ezgillespz section. ezgillespz itself must be
+        installed where w_run runs; it is not a WEBNG dependency.
+        """
+        src = os.path.join(self._bng_assets_dir(), "ezgillespz_propagator.py")
+        shutil.copyfile(src, "ezgillespz_propagator.py")
+        try:
+            import ezgillespz  # noqa: F401
+        except ImportError:
+            warnings.warn(
+                "propagator_type is ezgillespz, but ezgillespz is not installed in "
+                "this environment. Install it (pip install -e /path/to/ezgillespz) "
+                "in the environment that will run w_run.")
+
     @staticmethod
     def _bng_lib_name(system=None, machine=None):
         """
@@ -1653,7 +1771,13 @@ class weConvert:
         """
         # TODO: Add submission scripts for varied clusters
         # TODO: Add a hook to write any submission scripts?
-        lines = ["#!/bin/bash", 'w_run --work-manager processes "$@"']
+        if self.propagator_type == "ezgillespz":
+            # ezgillespz parallelizes inside each batch (all CPU threads, or
+            # the GPU), so one process runs the whole iteration: no segments
+            # pickled between processes, and one GPU context
+            lines = ["#!/bin/bash", 'w_run --work-manager serial "$@"']
+        else:
+            lines = ["#!/bin/bash", 'w_run --work-manager processes "$@"']
         
         full_text = "\n".join(lines)
         with open("run.sh", "w") as f:
@@ -2014,6 +2138,79 @@ class weConvert:
             self._libRR_westcfg()
         elif self.propagator_type == "bng":
             self._bng_westcfg()
+        elif self.propagator_type == "ezgillespz":
+            self._ezgillespz_westcfg()
+
+    def _ezgillespz_westcfg(self):
+        if self.binning_style == "mabl":
+            drivers_block  = [
+                "  drivers:",
+                "    module_path: $WEST_SIM_ROOT",
+                "    we_driver: MABL_driver.MABLDriver",
+            ]
+            plugin_insert = []
+        elif self.binning_style == "adaptive":
+            drivers_block  = []
+            plugin_insert = [
+                "    - plugin: westpa.westext.adaptvoronoi.AdaptiveVoronoiDriver",
+                "      av_enabled: true",
+                "      dfunc_method: system.dfunc",
+                "      walk_count: {}".format(self.traj_per_bin),
+                "      max_centers: {}".format(self.max_centers),
+                "      center_freq: {}".format(self.center_freq),
+            ]
+        else:
+            drivers_block  = []
+            plugin_insert = []
+
+        gen_istates = "true" if self.do_recycling else "false"
+        seed = "null" if self.ezg_seed is None else str(self.ezg_seed)
+
+        lines = (
+            ["# vi: set filetype=yaml :","---","west:"]
+            + drivers_block
+            + [
+            "  system:",
+            "    driver: system.System",
+            "    module_path: $WEST_SIM_ROOT",
+            "  propagation:",
+            "    max_total_iterations: {}".format(self.max_iter),
+            "    max_run_wallclock:    {}".format(self.max_wallclock),
+            "    propagator:           ezgillespz_propagator.ezgillespzPropagator",
+            "    gen_istates:          {}".format(gen_istates),
+            "    # segments per propagate() call; the propagator runs each call as one batch",
+            "    block_size:           {}".format(self.block_size),
+            "  data:",
+            "    west_data_file: west.h5",
+            "    datasets:",
+            "      - name:        pcoord",
+            "        scaleoffset: 4",
+            "      - name:        final_state",
+            "        scaleoffset: 4",
+            "      - name:        pool_microstate",
+            "        scaleoffset: 4",
+            "  plugins:"]
+            + plugin_insert
+            + ["    - plugin: restart_plugin.RestartDriver",
+            "  ezgillespz:",
+            "    init:",
+            "      net_file: ./bngl_conf/init.net",
+            "      init_time_step: 0",
+            "      final_time_step: {}".format(self.tau),
+            "      num_time_step: {}".format(self.plen + 1),
+            "      device: {}".format(self.ezg_device),
+            "      kind: {}".format(self.ezg_kind),
+            "      headroom_bits: {}".format(self.ezg_headroom_bits),
+            "      thin: {}".format("true" if self.ezg_thin else "false"),
+            "      seed: {}".format(seed),
+            "    data:",
+            "      pcoords: {}".format(('["' + '","'.join(self.pcoord_list) + '"]')),
+            ]
+        )
+
+        full_text = "\n".join(lines)
+        with open("west.cfg", "w") as f:
+            f.write(full_text)
 
     def _bng_westcfg(self):
         step_len = self.tau / self.plen
@@ -2059,8 +2256,6 @@ class weConvert:
             "    west_data_file: west.h5",
             "    datasets:",
             "      - name:        pcoord",
-            "        scaleoffset: 4",
-            "      - name:        seed",
             "        scaleoffset: 4",
             "      - name:        final_state",
             "        scaleoffset: 4",
@@ -2129,8 +2324,6 @@ class weConvert:
             "    west_data_file: west.h5",
             "    datasets:",
             "      - name:        pcoord",
-            "        scaleoffset: 4",
-            "      - name:        seed",
             "        scaleoffset: 4",
             "      - name:        final_state",
             "        scaleoffset: 4",
@@ -2388,6 +2581,9 @@ class weConvert:
             self._write_restartDriver()
             self._write_bngPropagator()
             self._copy_bng_lib()
+        elif self.propagator_type == "ezgillespz":
+            self._write_restartDriver()
+            self._write_ezgillespzPropagator()
         if self.binning_style == "mabl":
             self._write_mabl_driver()
         if self.do_recycling:
@@ -2444,10 +2640,10 @@ class weConvert:
             self._executable_BNGL_on_file()
         elif self.propagator_type == "libRoadRunner":
             self._libRR_BNGL_on_file()
-        elif self.propagator_type == "bng":
-            # bng only ever needs the .net file — both the propagator
-            # itself and _sample_basis_states_bng() (used for recycling)
-            # read the .net file directly via libssa.so, with no SBML/XML
+        elif self.propagator_type in ("bng", "ezgillespz"):
+            # bng and ezgillespz only ever need the .net file — both the
+            # propagators and their basis-state samplers (used for
+            # recycling) read the .net file directly, with no SBML/XML
             # export step. (libRoadRunner is only needed for recycling
             # when propagator_type == "libRoadRunner"; see
             # _sample_basis_states_libRR.)
