@@ -2,6 +2,7 @@ import os
 import yaml
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.spatial import cKDTree
 from sklearn.cluster import DBSCAN
 from webng.analysis.analysis import weAnalysis
 from webng.analysis import markov
@@ -17,29 +18,41 @@ METHODS = ("dbscan", "gpcca")
 
 class weCluster(weAnalysis):
     """
-    Finds macrostates and writes them to states.yaml, for `network` (and any
-    other tool that reads states.yaml). Two methods:
+    Finds macrostates among the run's WE bins and writes them to states.yaml,
+    for `network` (and any other tool that reads states.yaml). Two methods:
 
-      dbscan  density: DBSCAN on the densest cells of the progress-coordinate
-              histogram (pdist.h5). Options: threshold (percentile of density
-              a cell needs), min-samples, eps.
-      gpcca   dynamics: GPCCA+ on the run's bin-to-bin transition matrix
-              (lag tau, one WE iteration), flux-symmetrized so each state keeps
-              its stationary probability. Every bin the chain moves through
-              back and forth gets a state. Options: n-clusters (null: GPCCA+
-              picks the number, from 2 to max-clusters, by crispness). Uses the
-              run's own bins (a w_assign without states), or the assign-h5 file
-              if one is given, e.g. assignments with someone else's bins.
+      dbscan  where the walkers spend their time: keep the most probable bins
+              until they hold `probability-mass` of the probability (bins'
+              average probability over the iterations), then group the kept
+              bins that lie close together in progress-coordinate space with
+              DBSCAN. Distances are measured after scaling every coordinate to
+              [0, 1] over the range the run covered (after log10(x + 1) with
+              `log-scale: true`), so `eps` is a fraction of that range, or
+              chosen automatically (null): twice the median distance from a
+              kept bin to its nearest kept neighbour. `min-samples` counts
+              bins, the bin itself included. Bins left out by the cutoff, or
+              that DBSCAN calls noise, belong to no state. Rare states (little
+              probability) are cut first; for those use gpcca.
+      gpcca   how the walkers move: GPCCA+ on the bin-to-bin transition matrix
+              (lag tau, one WE iteration), flux-symmetrized so each state
+              keeps its stationary probability. Every bin the walkers move
+              back and forth through gets a state, rare ones included.
+              `n-clusters`: the number of states, or null to let GPCCA+ choose
+              between 2 and `max-clusters` by crispness. Also writes
+              cluster_gpcca.txt (state probabilities and transition
+              probabilities between states).
 
-    Either way a state lists coordinates; w_assign puts every bin containing
-    one of them in that state. gpcca lists one coordinate per bin: a progress
-    coordinate the run actually had in that bin.
+    Both use the run's own bins (a w_assign of the run, cached as
+    assign_bins.h5) or the analyses' assign-h5 file if one is given, e.g.
+    assignments with someone else's bins. Each state lists one coordinate per
+    bin: a progress coordinate the run actually had in that bin, so w_assign
+    puts exactly those bins in the state.
     """
 
     def __init__(self, opts):
-        # gpcca runs w_assign, which opens west.h5 for writing while this
-        # analysis holds it open to read: no file locking (as network does),
-        # set before the base class opens it and inherited by the WESTPA tools
+        # w_assign opens west.h5 for writing while this analysis holds it open
+        # to read: no file locking (as network does), set before the base
+        # class opens it and inherited by the WESTPA tools
         os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
         super().__init__(opts)
         self.method = str(self._getd(opts, "method", default="dbscan", required=False)).lower()
@@ -48,104 +61,46 @@ class weCluster(weAnalysis):
                 ", ".join(METHODS), self.method))
         self.set_dims(self._getd(opts, "dimensions", required=False))
         # dbscan
-        self.bins = self._getd(opts, "bins", default=30, required=False)
-        self.threshold = self._getd(opts, "threshold", default=90, required=False)
-        self.min_samples = self._getd(opts, "min-samples", default=2, required=False)
-        self.eps = self._getd(opts, "eps", default=1.5, required=False)
+        if opts.get("threshold") is not None:
+            raise ValueError("cluster: 'threshold' (a percentile of histogram density) has been "
+                             "replaced by 'probability-mass': keep the most probable bins until "
+                             "they hold this fraction of the probability, e.g. 0.9")
+        self.probability_mass = float(self._getd(opts, "probability-mass", default=0.9, required=False))
+        if not 0 < self.probability_mass <= 1:
+            raise ValueError("cluster: probability-mass must be in (0, 1], got {}".format(self.probability_mass))
+        self.eps = self._getd(opts, "eps", default=None, required=False)
+        if self.eps is not None and not 0 < float(self.eps) <= 1:
+            raise ValueError("cluster: eps is a fraction of each progress coordinate's range, in "
+                             "(0, 1] (or null to choose it automatically), got {}. (It used to be "
+                             "a number of histogram cells.)".format(self.eps))
+        self.min_samples = int(self._getd(opts, "min-samples", default=2, required=False))
+        self.log_scale = bool(self._getd(opts, "log-scale", default=False, required=False))
         # gpcca
         self.n_clusters = self._getd(opts, "n-clusters", default=None, required=False)
         self.max_clusters = int(self._getd(opts, "max-clusters", default=10, required=False))
 
     def run(self):
         try:
+            assign_path = self.ensure_bin_assign()
+            print("Counting bin-to-bin transitions in iterations {}-{}...".format(
+                self.first_iter, self.last_iter))
+            C, rep, visited = markov.bin_flux_from_assignments(
+                assign_path, self.west_path, self.first_iter, self.last_iter)
             if self.method == "gpcca":
-                return self.run_gpcca()
-            return self.run_dbscan()
+                return self.run_gpcca(C, rep, visited)
+            return self.run_dbscan(C, rep, visited)
         finally:
             os.chdir(self.curr_path)
 
     # ------------------------------------------------------------------
-    # dbscan
-    # ------------------------------------------------------------------
-
-    def run_dbscan(self):
-        datFile = self.ensure_pdist()
-        # pdist.h5 already covers exactly first_iter..last_iter, so use every row
-        # (indexing it by iteration number again would double-offset the range)
-        Hists = datFile["histograms"][:].mean(axis=0)
-
-        # Figure out which bins are contained in high density regions
-        density_threshold = np.percentile(Hists, self.threshold)
-        high_density_bins = Hists > density_threshold
-        dense_coords = np.column_stack(np.where(high_density_bins))
-
-        # Run DBSCAN to cluster bins
-        dbscan = DBSCAN(eps=self.eps, min_samples=self.min_samples).fit(dense_coords)
-        cluster_labels = dbscan.labels_
-        final_cluster_grid = np.full(Hists.shape,-1)
-        for coord, label in zip(dense_coords, cluster_labels):
-            final_cluster_grid[tuple(coord)] = label
-
-        print("plotting macrostates")
-        figs = []
-        colors = plt.rcParams['axes.prop_cycle'].by_key()['color']
-        for jj in range(self.dims):
-            for ii in range(jj+1,self.dims):
-                # each dimension can have its own number of bins (see pdist_bin_edges)
-                label_grid = [[set() for _ in range(final_cluster_grid.shape[ii])]
-                              for _ in range(final_cluster_grid.shape[jj])]
-                for index in np.ndindex(final_cluster_grid.shape):
-                    x_ind = index[jj]
-                    y_ind = index[ii]
-                    label = final_cluster_grid[index]
-                    if label != -1:
-                        label_grid[x_ind][y_ind].add(label)
-                label_grid = [[sorted(list(cell)) for cell in row] for row in label_grid]
-
-                x_mid = datFile['midpoints_{}'.format(jj)][:]
-                y_mid = datFile['midpoints_{}'.format(ii)][:]
-
-                # Create a scatterplot displaying macrostates
-                f, ax = plt.subplots(figsize=(8,6))
-                for ix,x in enumerate(x_mid):
-                    for iy,y in enumerate(y_mid):
-                        label = label_grid[ix][iy]
-                        if label == []:
-                            s = 3
-                            ax.scatter(x,y,marker='o',s=s,c='k')
-                        else:
-                            s = 80
-                            for l in label:
-                                ax.scatter(x,y,marker=f'${l}$',s=s,c=colors[l % len(colors)],alpha=0.5)
-                ax.set_xlabel(self.names[jj])
-                ax.set_ylabel(self.names[ii])
-                f.savefig('cluster_{}_{}.png'.format(self.names[jj],self.names[ii]))
-                figs.append(f)
-
-        print("printing macrostates")
-        # Each state's coords are the midpoints of its bins, as plain floats,
-        # written by a YAML library. (Formatting NumPy numbers as text gives
-        # "np.float64(0.5)" under NumPy 2, which YAML reads back as a string,
-        # so w_assign couldn't use the file.)
-        midpoints = [datFile['midpoints_{}'.format(d)][:] for d in range(final_cluster_grid.ndim)]
-        states = []
-        for label in range(int(final_cluster_grid.max()) + 1):
-            coords = [[float(midpoints[d][i]) for d, i in enumerate(index)]
-                      for index in zip(*np.where(final_cluster_grid == label))]
-            states.append({"label": "state{}".format(label), "coords": coords})
-        self.write_states_yaml(states)
-        return figs
-
-    # ------------------------------------------------------------------
-    # gpcca
+    # bin assignments, shared by both methods
     # ------------------------------------------------------------------
 
     def ensure_bin_assign(self):
         """
-        Bin assignments of every segment point, without states: the assign-h5
-        file if one was given (with or without states), otherwise a w_assign
-        of the whole run with its own bins, cached as assign_bins.h5. Returns
-        its path.
+        Bin assignments of every segment point: the assign-h5 file if one was
+        given (with or without states), otherwise a w_assign of the whole run
+        with its own bins, cached as assign_bins.h5. Returns its path.
         """
         if self.provided_assign is not None:
             if not os.path.isfile(self.provided_assign):
@@ -177,12 +132,87 @@ class weCluster(weAnalysis):
         import h5py
         return h5py.File(self.west_path, "r")
 
-    def run_gpcca(self):
-        assign_path = self.ensure_bin_assign()
-        print("Counting bin-to-bin transitions in iterations {}-{}...".format(
-            self.first_iter, self.last_iter))
-        C, rep, visited = markov.bin_flux_from_assignments(
-            assign_path, self.west_path, self.first_iter, self.last_iter)
+    # ------------------------------------------------------------------
+    # dbscan
+    # ------------------------------------------------------------------
+
+    def scaled_points(self, points, reference):
+        """Points in the coordinates DBSCAN measures distances in: log10(x + 1)
+        first with log-scale, then each dimension scaled to [0, 1] over
+        `reference` (every visited bin's point)."""
+        def tr(x):
+            x = np.asarray(x, dtype=float)
+            return np.log10(np.maximum(x, 0) + 1.0) if self.log_scale else x
+        ref = tr(reference)
+        lo, span = ref.min(axis=0), np.ptp(ref, axis=0)
+        span[span == 0] = 1.0
+        return (tr(points) - lo) / span
+
+    @staticmethod
+    def auto_eps(scaled):
+        """Twice the median distance from a point to its nearest other point."""
+        if len(scaled) < 2:
+            return 1.0
+        d = cKDTree(scaled).query(scaled, k=2)[0][:, 1]
+        d = d[d > 0]
+        return float(2 * np.median(d)) if len(d) else 1.0
+
+    def run_dbscan(self, C, rep, visited):
+        n_iter = int(self.last_iter) - int(self.first_iter) + 1
+        p = C.sum(axis=0) / n_iter              # each bin's average probability (weight ending there)
+        bins = np.nonzero(visited & (p > 0))[0]
+        if len(bins) == 0:
+            raise RuntimeError("cluster: no walker ended a segment in iterations {}-{}".format(
+                self.first_iter, self.last_iter))
+        # the most probable bins until they hold probability-mass of the probability
+        order = bins[np.argsort(-p[bins], kind="stable")]
+        cum = np.cumsum(p[order]) / p[bins].sum()
+        core = order[: int(np.searchsorted(cum, self.probability_mass - 1e-12) + 1)]
+
+        X = self.scaled_points(rep[core], rep[bins])
+        eps = float(self.eps) if self.eps is not None else self.auto_eps(X)
+        raw = DBSCAN(eps=eps, min_samples=self.min_samples).fit(X).labels_
+        # states numbered by decreasing probability; noise (-1) is no state
+        clusters = [c for c in np.unique(raw) if c >= 0]
+        clusters.sort(key=lambda c: -p[core[raw == c]].sum())
+        labels = np.full(len(core), -1)
+        for k, c in enumerate(clusters):
+            labels[raw == c] = k
+        names = ["state{}".format(k) for k in range(len(clusters))]
+        states = [{"label": names[k], "coords": [[float(v) for v in rep[b]] for b in core[labels == k]]}
+                  for k in range(len(clusters))]
+        self.write_states_yaml(states)
+
+        total = p[bins].sum()
+        lines = ["DBSCAN on the most probable bins (iterations {}-{})".format(self.first_iter, self.last_iter),
+                 "kept {} of {} bins, holding {:.3f} of the probability (probability-mass {})".format(
+                     len(core), len(bins), p[core].sum() / total, self.probability_mass),
+                 "eps {:.4g} ({}) of each coordinate's range{}, min-samples {}; {} states, {} kept bins as noise".format(
+                     eps, "automatic" if self.eps is None else "set", " after log10(x + 1)" if self.log_scale else "",
+                     self.min_samples, len(clusters), int((labels == -1).sum())),
+                 "",
+                 "{:>8}  {:>14}  {:>8}".format("State", "Probability", "Bins"),
+                 "-" * 34]
+        lines += ["{:>8}  {:>14.4g}  {:>8d}".format(names[k], p[core[labels == k]].sum() / total,
+                                                  int((labels == k).sum())) for k in range(len(clusters))]
+        lines += ["", "MFPTs between these states: run the network analysis on this states.yaml."]
+        with open("cluster_dbscan.txt", "w") as f:
+            f.write("\n".join(lines) + "\n")
+        print("\n".join(lines))
+
+        # every visited bin in the plot; bins in no state in grey
+        all_labels = np.full(len(bins), -1)
+        pos = {b: i for i, b in enumerate(bins)}
+        for b, l in zip(core, labels):
+            all_labels[pos[b]] = l
+        return self.plot_bin_states(rep[bins], all_labels, p[bins] / total, names, "dbscan",
+                                    "DBSCAN states (one point per bin; size ~ log probability)")
+
+    # ------------------------------------------------------------------
+    # gpcca
+    # ------------------------------------------------------------------
+
+    def run_gpcca(self, C, rep, visited):
         print("Running GPCCA+ ({})...".format(
             "{} clusters".format(self.n_clusters) if self.n_clusters is not None
             else "number of clusters by crispness, 2 to {}".format(self.max_clusters)))
@@ -213,32 +243,39 @@ class weCluster(weAnalysis):
             f.write("\n".join(lines) + "\n")
         print("\n".join(lines))
 
-        figs = self.plot_bin_states(rep[act], labels, g["pi"], names)
-        return figs
+        return self.plot_bin_states(rep[act], labels, g["pi"], names, "gpcca",
+                                    "GPCCA+ states (one point per bin; size ~ log stationary probability)")
 
-    def plot_bin_states(self, points, labels, pi, names):
+    # ------------------------------------------------------------------
+    # shared output
+    # ------------------------------------------------------------------
+
+    def plot_bin_states(self, points, labels, prob, names, method, title):
         """
         Each bin as the progress coordinate representing it, coloured by state
-        and sized by its stationary probability (log scale), in every pair of
-        dimensions. Works for any binning scheme.
+        (grey: no state) and sized by its probability (log scale), in every
+        pair of dimensions. Works for any binning scheme.
         """
         figs = []
         cmap = plt.get_cmap("tab10")
-        lp = np.log10(np.maximum(pi, 1e-300))
+        lp = np.log10(np.maximum(prob, 1e-300))
         size = 8 + 60 * (lp - lp.min()) / max(np.ptp(lp), 1e-12)
+        groups = [(-1, "no state", "lightgrey")] + [(k, n, cmap(k % 10)) for k, n in enumerate(names)]
         for jj in range(self.dims):
             for ii in range(jj + 1, self.dims):
                 f, ax = plt.subplots(figsize=(8, 6))
-                for k, name in enumerate(names):
+                for k, name, color in groups:
                     sel = labels == k
-                    ax.scatter(points[sel, jj], points[sel, ii], s=size[sel], color=cmap(k % 10),
+                    if not sel.any():
+                        continue
+                    ax.scatter(points[sel, jj], points[sel, ii], s=size[sel], color=color,
                                edgecolors="k", linewidths=0.3, alpha=0.85,
-                               label="{} ({} bins, p={:.2g})".format(name, int(sel.sum()), pi[sel].sum()))
+                               label="{} ({} bins, p={:.2g})".format(name, int(sel.sum()), prob[sel].sum()))
                 ax.set_xlabel(self.names[jj])
                 ax.set_ylabel(self.names[ii])
-                ax.set_title("GPCCA+ states (one point per bin; size ~ log stationary probability)")
+                ax.set_title(title)
                 ax.legend(fontsize=7, loc="best")
-                f.savefig("cluster_gpcca_{}_{}.png".format(self.names[jj], self.names[ii]),
+                f.savefig("cluster_{}_{}_{}.png".format(method, self.names[jj], self.names[ii]),
                           dpi=150, bbox_inches="tight")
                 figs.append(f)
         return figs

@@ -160,10 +160,13 @@ class weTemplater:
                 "cluster": {
                     "enabled": False,
                     "method": "dbscan",       # dbscan (density) or gpcca (dynamics)
-                    # dbscan
-                    "threshold": 90,
+                    # dbscan: the most probable bins holding probability-mass of the
+                    # probability, grouped when within eps (a fraction of each
+                    # coordinate's range; null: automatic) of each other
+                    "probability-mass": 0.9,
+                    "eps": None,
                     "min-samples": 2,
-                    "eps": 1.5,
+                    "log-scale": False,
                     # gpcca: null lets GPCCA+ choose (2..max-clusters, by crispness)
                     "n-clusters": None,
                     "max-clusters": 10,

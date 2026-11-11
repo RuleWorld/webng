@@ -2104,7 +2104,7 @@ os.chdir(curr_path)'''))
         nb.cells.append(nbf.v4.new_markdown_cell('''## Cluster Analysis
 The cluster analysis finds macrostates and records them in *states.yaml* as lists of coordinates; every WESTPA bin containing one of a state's coordinates belongs to that state. The network analysis below then uses *states.yaml*. Two methods:
 
-* **dbscan** (density): builds *pdist.h5* (the probability distribution of each progress coordinate over the iterations) and runs scikit-learn's DBSCAN on its densest cells. Its states are dense regions; bins between them belong to no state.
+* **dbscan** (where the walkers spend their time): keeps the most probable WESTPA bins until they hold `probability-mass` of the probability, then groups the kept bins that lie close together with scikit-learn's DBSCAN. Distances are measured with every progress coordinate scaled to 0-1 over the range the run covered (after log10(x + 1) with `log-scale`), so `eps` is a fraction of that range, or chosen automatically. Its states are the probable regions; other bins belong to no state, and states holding little probability are cut first. It also writes *cluster_dbscan.txt*.
 * **gpcca** (dynamics): builds the run's bin-to-bin transition matrix (lag tau) and splits the bins into metastable states with GPCCA+, so each state is a set of bins the walkers move among quickly and leave slowly. Every bin the walkers move back and forth through gets a state, and states holding little probability (rare phenotypes) are kept. It also writes *cluster_gpcca.txt* with each state's stationary probability and the state-to-state transition probabilities per iteration.
 
 If there is more than 1 progress coordinate, 2D scatter plots show the macrostates.'''))
@@ -2112,9 +2112,10 @@ If there is more than 1 progress coordinate, 2D scatter plots show the macrostat
     **analsyis_opts,
     'method': 'dbscan',     # 'dbscan' (density) or 'gpcca' (dynamics)
     # dbscan
-    'threshold': 90,        # Percentile that the coordinate needs to reach to be considered part of a macrostate, or a dense coordinate
-    'min-samples': 2,       # The minimum number of dense coordinates to be considered a macrostate
-    'eps': 1.5,             # The maximum difference 2 dense coordinates can have to be considered part of the same macrostate
+    'probability-mass': 0.9,  # Keep the most probable bins until they hold this fraction of the probability
+    'eps': None,            # How close (fraction 0-1 of each coordinate's range) two kept bins must be to be grouped. 'None' chooses it automatically
+    'min-samples': 2,       # Bins (itself included) a bin needs within eps to start a macrostate
+    'log-scale': False,     # Measure distances on log10(x + 1), for coordinates spanning orders of magnitude
     # gpcca
     'n-clusters': None,     # Number of macrostates. 'None' lets GPCCA+ choose between 2 and max-clusters by crispness
     'max-clusters': 10,

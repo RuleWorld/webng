@@ -31,52 +31,93 @@ from conftest import CI_DTYPE, write_stamped, write_west
 # cluster
 # ---------------------------------------------------------------------------
 
-def test_cluster_writes_one_state_per_dense_region(analysis_sim):
-    sim = analysis_sim()
-    c = weCluster({"sim_name": "sim", "work-path": None, "pcoords": ["A", "B"],
-                   "bins": 10, "threshold": 90, "min-samples": 2, "eps": 1.5,
-                   "first-iter": None, "last-iter": None})
-    hist = np.zeros((10, 10))
-    hist[1:3, 1:3] = 1.0                       # region 1: 2x2 bins
-    hist[7:9, 6:9] = 1.0                       # region 2: 2x3 bins, far away
-    mid_a, mid_b = np.arange(10) + 0.5, (np.arange(10) + 0.5) * 10
-    # cwd is now the analysis folder (weAnalysis.__init__ moved there)
-    write_stamped("pdist.h5", c.pdist_stamp(),
-             histograms=np.stack([hist, hist]), midpoints_0=mid_a, midpoints_1=mid_b)
-    c.run()
+# Twelve bins: group A (bins 0-3, near (100, 100), probability 0.2 each), group
+# B (bins 4-7, near (3000, 3000), 0.04 each, so B is 2% of the total per bin)
+# and four scattered bins (0.01 each). Walkers jump between bins with these
+# probabilities (every row of T is the same), so each bin's average
+# probability is exactly its entry here.
+DBSCAN_P = np.array([0.2] * 4 + [0.04] * 4 + [0.01] * 4)
+DBSCAN_POINTS = np.array([[100 + 10 * k, 100.0] for k in range(4)]
+                         + [[3000 + 10 * k, 3000.0] for k in range(4)]
+                         + [[1500, 500], [500, 2500], [2500, 700], [800, 1800.0]])
 
+
+def _dbscan_cluster(analysis_sim, **opts):
+    sim = analysis_sim()
+    T = np.tile(DBSCAN_P, (12, 1))
+    asg, nsegs, npts = _write_run(str(sim), T, 10, DBSCAN_POINTS)
+    c = weCluster({"sim_name": "sim", "work-path": None, "pcoords": ["A", "B"],
+                   "method": "dbscan", "first-iter": None, "last-iter": None, **opts})
+    _stamp_bins("assign_bins.h5", c.stamp("w_assign bins"), asg, nsegs, npts, 12)
+    return sim, c
+
+
+def _states(sim):
     with open(sim / "analysis" / "states.yaml") as f:
-        states = yaml.safe_load(f)["states"]
-    assert len(states) == 2
+        return yaml.safe_load(f)["states"]
+
+
+@pytest.mark.parametrize("eps", [None, 0.05])
+def test_dbscan_keeps_the_probable_bins_and_groups_nearby_ones(analysis_sim, eps):
+    """probability-mass 0.95 keeps A and B (0.96 of the probability) and drops
+    the scattered bins; DBSCAN then finds A and B, A first (more probable)."""
+    sim, c = _dbscan_cluster(analysis_sim, **{"probability-mass": 0.95, "eps": eps})
+    c.run()
+    states = _states(sim)
+    assert [s["label"] for s in states] == ["state0", "state1"]
+    assert sorted(map(tuple, states[0]["coords"])) == sorted(map(tuple, DBSCAN_POINTS[:4]))
+    assert sorted(map(tuple, states[1]["coords"])) == sorted(map(tuple, DBSCAN_POINTS[4:8]))
     for state in states:
         for point in state["coords"]:
             assert all(isinstance(v, float) for v in point), point   # numbers, not text
-    found = sorted(sorted(map(tuple, s["coords"])) for s in states)
-    expected = sorted([
-        sorted((mid_a[i], mid_b[j]) for i in (1, 2) for j in (1, 2)),
-        sorted((mid_a[i], mid_b[j]) for i in (7, 8) for j in (6, 7, 8)),
-    ])
-    assert found == expected
+    report = (sim / "analysis" / "cluster_dbscan.txt").read_text()
+    assert "kept 8 of 12 bins" in report and "2 states" in report
 
 
-def test_cluster_handles_dimensions_with_different_bin_counts(analysis_sim):
-    """With whole-integer bins each dimension has its own bin count: here 14 x 6
-    with `bins` set to 10 (the old grid was bins x bins and overflowed)."""
-    sim = analysis_sim()
-    c = weCluster({"sim_name": "sim", "work-path": None, "pcoords": ["A", "B"],
-                   "bins": 10, "threshold": 90, "min-samples": 2, "eps": 1.5,
-                   "first-iter": None, "last-iter": None})
-    hist = np.zeros((14, 6))
-    hist[11:13, 3:5] = 1.0
-    hist[1:3, 0:2] = 1.0
-    write_stamped("pdist.h5", c.pdist_stamp(), histograms=np.stack([hist, hist]),
-                  midpoints_0=np.arange(14.0), midpoints_1=np.arange(6.0))
+def test_dbscan_probability_mass_decides_which_bins_count(analysis_sim):
+    """With 0.8 only group A's bins are kept: one state."""
+    sim, c = _dbscan_cluster(analysis_sim, **{"probability-mass": 0.8})
     c.run()
-    with open(sim / "analysis" / "states.yaml") as f:
-        states = yaml.safe_load(f)["states"]
-    found = sorted(sorted(map(tuple, s["coords"])) for s in states)
-    assert found == sorted([sorted((float(i), float(j)) for i in (1, 2) for j in (0, 1)),
-                            sorted((float(i), float(j)) for i in (11, 12) for j in (3, 4))])
+    states = _states(sim)
+    assert len(states) == 1
+    assert sorted(map(tuple, states[0]["coords"])) == sorted(map(tuple, DBSCAN_POINTS[:4]))
+
+
+@pytest.mark.parametrize("units", [1.0, 1000.0])
+def test_dbscan_eps_is_a_fraction_of_each_coordinates_range(analysis_sim, units, monkeypatch):
+    """The same eps finds the same states whatever the coordinates' units."""
+    monkeypatch.setattr(sys.modules[__name__], "DBSCAN_POINTS", DBSCAN_POINTS * units)
+    sim, c = _dbscan_cluster(analysis_sim, **{"probability-mass": 0.95, "eps": 0.05})
+    c.run()
+    states = _states(sim)
+    assert len(states) == 2
+    scaled = sys.modules[__name__].DBSCAN_POINTS       # already in the new units
+    assert sorted(map(tuple, states[0]["coords"])) == sorted(map(tuple, scaled[:4]))
+
+
+def test_scaling_and_automatic_eps(analysis_sim):
+    sim, c = _dbscan_cluster(analysis_sim)
+    X = c.scaled_points(DBSCAN_POINTS, DBSCAN_POINTS)
+    assert X.min(axis=0) == pytest.approx([0, 0]) and X.max(axis=0) == pytest.approx([1, 1])
+    c.log_scale = True
+    L = c.scaled_points(np.array([[9.0, 0.0], [99.0, 0.0], [999.0, 1.0]]),
+                        np.array([[9.0, 0.0], [999.0, 1.0]]))
+    assert L[:, 0] == pytest.approx([0.0, 0.5, 1.0])          # log10(x + 1): 1, 2, 3
+    # twice the median nearest-neighbour distance: neighbours here are 0.1 apart
+    assert c.auto_eps(np.array([[0.0], [0.1], [0.2], [0.3]])) == pytest.approx(0.2)
+    os.chdir(c.curr_path)
+
+
+@pytest.mark.parametrize("opts, match", [
+    ({"threshold": 90}, "probability-mass"),        # the old option, replaced
+    ({"eps": 1.5}, "fraction"),                      # the old meaning: histogram cells
+    ({"probability-mass": 0}, "probability-mass"),
+])
+def test_dbscan_rejects_old_style_options(analysis_sim, opts, match):
+    analysis_sim()
+    with pytest.raises(ValueError, match=match):
+        weCluster({"sim_name": "sim", "work-path": None, "pcoords": ["A", "B"],
+                   "method": "dbscan", "first-iter": None, "last-iter": None, **opts})
 
 
 # ---------------------------------------------------------------------------

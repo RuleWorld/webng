@@ -240,29 +240,38 @@ Cluster
 
    cluster:
       enabled: true
-      method: dbscan       # dbscan (density) or gpcca (dynamics)
-      threshold: 90        # dbscan
-      min-samples: 2       # dbscan
-      eps: 1.5             # dbscan
-      n-clusters: null     # gpcca
-      max-clusters: 10     # gpcca
+      method: dbscan          # dbscan (density) or gpcca (dynamics)
+      probability-mass: 0.9   # dbscan
+      eps: null               # dbscan
+      min-samples: 2          # dbscan
+      log-scale: false        # dbscan
+      n-clusters: null        # gpcca
+      max-clusters: 10        # gpcca
 
 This is the block for :ref:`Cluster analysis`, which finds macrostates and writes them to
 :code:`states.yaml` (each state a list of coordinates; every WESTPA bin containing one of them
 belongs to that state). :code:`method` picks how:
 
-* :code:`dbscan` runs DBSCAN on the densest cells of the progress-coordinate histogram
-  (:code:`pdist.h5`, made with :code:`analysis_bins` bins per dimension if it doesn't exist).
-  :code:`threshold` is the percentile of density a cell needs, :code:`min-samples` and
-  :code:`eps` are DBSCAN's. States are dense regions; bins between them belong to no state.
+* :code:`dbscan` keeps the most probable WESTPA bins until they hold :code:`probability-mass` of
+  the probability (each bin's average probability over the iterations), then groups the kept bins
+  that lie close together with DBSCAN. Distances are measured with every progress coordinate
+  scaled to [0, 1] over the range the run covered (after :code:`log10(x + 1)` with
+  :code:`log-scale: true`, for coordinates spanning orders of magnitude), so :code:`eps` is a
+  fraction of that range; :code:`null` chooses twice the median distance from a kept bin to its
+  nearest kept neighbour. :code:`min-samples` counts bins, the bin itself included. Bins left out,
+  or that DBSCAN calls noise, belong to no state, and states holding little probability are cut
+  first (that is what :code:`gpcca` is for). Also writes :code:`cluster_dbscan.txt`.
 * :code:`gpcca` runs GPCCA+ (`pyGPCCA <https://github.com/msmdev/pyGPCCA>`_) on the run's
   bin-to-bin transition matrix at lag tau, made reversible by symmetrizing the stationary flux so
   each state keeps its probability. Every bin the walkers move back and forth through gets a
   state, including states that hold little probability. :code:`n-clusters` is the number of
   states, or :code:`null` to let GPCCA+ choose between 2 and :code:`max-clusters` by crispness.
-  It uses the run's own bins (a :code:`w_assign` without states, :code:`assign_bins.h5`), or the
-  file named by :code:`analyses: assign-h5`, and also writes :code:`cluster_gpcca.txt` (each
-  state's stationary probability and the state-to-state transition probabilities).
+  Also writes :code:`cluster_gpcca.txt` (each state's stationary probability and the
+  state-to-state transition probabilities).
+
+Both use the run's own bins (a :code:`w_assign` of the run, :code:`assign_bins.h5`), or the file
+named by :code:`analyses: assign-h5`, and list one coordinate per bin in :code:`states.yaml`: a
+progress coordinate the run actually had in that bin.
 
 .. _network:
 
