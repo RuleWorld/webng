@@ -6,9 +6,10 @@ built once and shared by the tests in this file. Each analysis then runs
 through the real `webng analysis --opts` command (so the dispatcher in
 weAnalysis.py is exercised too) on the simulation that suits it:
 
-  regular   average, evolution, cluster
-  adaptive  network, pcca, and average with Voronoi boundaries drawn
-            (pcca needs Voronoi bin centers)
+  regular   average, evolution, cluster (dbscan); cluster (gpcca), which
+            must not depend on the binning scheme
+  adaptive  cluster (gpcca) then network on the states it found (w_assign,
+            w_direct, w_reweight), and average with Voronoi boundaries drawn
   mabl      flux (MABL always recycles, so it has a target state)
 
 These check that everything sets up, runs, and produces its outputs without
@@ -31,7 +32,7 @@ pytestmark = requires_bng_lib       # the template's default propagator is bng
 
 tfold = TESTS_DIR
 N_ITER = 5
-ANALYSES = ["average", "evolution", "cluster", "network", "flux", "pcca"]
+ANALYSES = ["average", "evolution", "cluster", "network", "flux"]
 
 
 def _names(style):
@@ -161,36 +162,40 @@ def test_average_evolution_cluster(build_sim):
     _assert_outputs(sim, "pdist.h5", "average.png", "evolution.png", "states.yaml")
 
 
-def _states_from_run(sim):
+def test_gpcca_on_regular_bins(build_sim):
     """
-    A states.yaml with two single-point states: the walkers with the lowest
-    and highest first observable in the last finished iteration. Taken from
-    the run itself so each point is guaranteed to fall in a bin that exists.
+    gpcca takes the run's own bins whatever the binning scheme: w_assign runs
+    on the regular bins and the transition counts come from its output. A
+    5-iteration toy run on bins 10 wide may move back and forth between too few
+    bins for GPCCA+ (it needs 3); then it must stop with a clear message.
     """
-    with h5py.File(os.path.join(sim, "west.h5"), "r") as f:
-        last = int(f.attrs["west_current_iteration"]) - 1
-        ends = f["iterations/iter_{:08d}/pcoord".format(last)][:, -1, :]
-    low, high = ends[np.argmin(ends[:, 0])], ends[np.argmax(ends[:, 0])]
-    os.makedirs(os.path.join(sim, "analysis"), exist_ok=True)
-    with open(os.path.join(sim, "analysis", "states.yaml"), "w") as f:
-        f.write("states:\n")
-        for label, point in [("low", low), ("high", high)]:
-            f.write("  - label: {}\n    coords:\n      - {}\n".format(
-                label, [float(v) for v in point]))
+    yaml_path, sim = build_sim("regular")
+    try:
+        _run_analyses(yaml_path, ["cluster"], settings={"cluster": {"method": "gpcca", "n-clusters": 2}})
+    except ValueError as e:
+        assert "GPCCA+ needs more" in str(e)
+    else:
+        _assert_outputs(sim, "states.yaml", "cluster_gpcca.txt")
+        with open(os.path.join(sim, "analysis", "states.yaml")) as f:
+            assert [s["label"] for s in yaml.safe_load(f)["states"]] == ["state0", "state1"]
+    _assert_outputs(sim, "assign_bins.h5")
+    with h5py.File(os.path.join(sim, "analysis", "assign_bins.h5"), "r") as f:
+        assert f["assignments"].shape[0] == N_ITER and int(f.attrs["nbins"]) > 1
 
 
-def test_network_pcca_and_voronoi_boundaries(build_sim):
+def test_gpcca_cluster_then_network_and_voronoi_boundaries(build_sim):
     yaml_path, sim = build_sim("adaptive")
-    _states_from_run(sim)
     _run_analyses(
-        yaml_path, ["average", "network", "pcca"],
+        yaml_path, ["average", "cluster", "network"],
         settings={"average": {"plot-boundaries": True},
-                  "network": {"step-iter": 1},
-                  "pcca": {"step-iter": 1}},
+                  "cluster": {"method": "gpcca", "n-clusters": 2},
+                  "network": {"step-iter": 1}},
         shared={"n-workers": 2},     # real w_pdist and w_assign with worker processes
     )
-    _assert_outputs(sim, "average.png", "assign.h5", "direct.h5", "tmat.h5",
-                    "output_pcca.txt", "mfpt_evolution.png", "voronoi_states.png")
+    _assert_outputs(sim, "average.png", "assign_bins.h5", "states.yaml", "cluster_gpcca.txt",
+                    "assign.h5", "direct.h5", "network.txt", "mfpt_evolution.png")
+    report = open(os.path.join(sim, "analysis", "network.txt")).read()
+    assert "state0 -> state1" in report and "State-to-state transition probabilities" in report
 
 
 def test_flux(build_sim):

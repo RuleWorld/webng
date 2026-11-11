@@ -159,25 +159,24 @@ class weTemplater:
                 },
                 "cluster": {
                     "enabled": False,
+                    "method": "dbscan",       # dbscan (density) or gpcca (dynamics)
+                    # dbscan
                     "threshold": 90,
                     "min-samples": 2,
-                    "eps": 1.5
+                    "eps": 1.5,
+                    # gpcca: null lets GPCCA+ choose (2..max-clusters, by crispness)
+                    "n-clusters": None,
+                    "max-clusters": 10,
                 },
                 "network": {
                     "enabled": False,
-                    "step-iter": 10
+                    "step-iter": 10,
+                    "matrix": True,           # also the transition matrix and its MFPTs
                 },
                 "flux": {
                     "enabled": False,
                     "step-iter": 1,
                     "output": "flux.png",
-                },
-                "pcca": {
-                    "enabled": False,
-                    "n-clusters": None,
-                    "step-iter": 5,
-                    "mfpt-pairs": None,
-                    "movement-h5": None,
                 },
             },
         }

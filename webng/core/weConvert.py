@@ -2102,12 +2102,23 @@ except Exception as e:
     print(e)
 os.chdir(curr_path)'''))
         nb.cells.append(nbf.v4.new_markdown_cell('''## Cluster Analysis
-This analysis creates *pdist.h5*, which contains all of the probability distributions for each progress coordinate for each iteration. The cluster analysis attempts to find macrostates within the probability distribitions in your progress coordinates using scikit-learn's DBSCAN tool. These macrostates are recorded in *states.yaml* as a list of coordinates. While the coordinates are from the analysis histogram bins, the WESTPA bins that feature the coordinates will be considered part of that macrostate. If there is more than 1 progress coordinate, 2D scatter plots will be plotted to show the macrostates.'''))
+The cluster analysis finds macrostates and records them in *states.yaml* as lists of coordinates; every WESTPA bin containing one of a state's coordinates belongs to that state. The network analysis below then uses *states.yaml*. Two methods:
+
+* **dbscan** (density): builds *pdist.h5* (the probability distribution of each progress coordinate over the iterations) and runs scikit-learn's DBSCAN on its densest cells. Its states are dense regions; bins between them belong to no state.
+* **gpcca** (dynamics): builds the run's bin-to-bin transition matrix (lag tau) and splits the bins into metastable states with GPCCA+, so each state is a set of bins the walkers move among quickly and leave slowly. Every bin the walkers move back and forth through gets a state, and states holding little probability (rare phenotypes) are kept. It also writes *cluster_gpcca.txt* with each state's stationary probability and the state-to-state transition probabilities per iteration.
+
+If there is more than 1 progress coordinate, 2D scatter plots show the macrostates.'''))
         nb.cells.append(nbf.v4.new_code_cell('''cluster_opts = {
     **analsyis_opts,
+    'method': 'dbscan',     # 'dbscan' (density) or 'gpcca' (dynamics)
+    # dbscan
     'threshold': 90,        # Percentile that the coordinate needs to reach to be considered part of a macrostate, or a dense coordinate
     'min-samples': 2,       # The minimum number of dense coordinates to be considered a macrostate
-    'eps': 1.5              # The maximum difference 2 dense coordinates can have to be considered part of the same macrostate
+    'eps': 1.5,             # The maximum difference 2 dense coordinates can have to be considered part of the same macrostate
+    # gpcca
+    'n-clusters': None,     # Number of macrostates. 'None' lets GPCCA+ choose between 2 and max-clusters by crispness
+    'max-clusters': 10,
+    'assign-h5': None,      # Optional w_assign file to take the bins from (e.g. someone else's bins). 'None' uses the run's own
 }'''))
         nb.cells.append(nbf.v4.new_code_cell('''os.chdir("..")
 clu_obj = wb.cluster.weCluster(cluster_opts)
@@ -2117,10 +2128,17 @@ except Exception as e:
     print(e)
 os.chdir(curr_path)'''))
         nb.cells.append(nbf.v4.new_markdown_cell('''## Network Analysis
-This analysis must be performed after the cluster analysis as it requires *states.yaml*. The network analysis traces the WESTPA simulation and calculates the rates from each macrostate alongside each macrostate's probabiltiy. The written results are recorded in *direct_output.txt*, and each rate as it evolves over the course of the simulation is plotted. It is important to note that all the rates are in units of "tau^-1". This means you must divide the rates by the specified tau of the WESTPA simulation in order to get the rates in inverse seconds.'''))
+This analysis must be performed after the cluster analysis as it requires *states.yaml* (from either cluster method, or written by hand). It assigns the run's walkers to those states (`w_assign`) and estimates the rates and mean first passage times (MFPTs) between them two ways:
+
+* **direct** (`w_direct`): each walker is labelled with the state it visited last; the rate from A to B is the flux of A-labelled walkers into B divided by the A-labelled probability. Rates are per tau ("tau^-1"); each rate's evolution is plotted (*rate_A_to_B.png*), and the tool's log is in *direct_output.txt*.
+* **matrix**: the bin-to-bin transition matrix at lag tau (each segment's weight counted from the bin it started in to the bin it ended in), lumped into the states (each state's stationary probability and the state-to-state transition probabilities), and MFPTs from it, plotted as they evolve (*mfpt_evolution.png*). Set `'matrix': False` to skip.
+
+Both are summarized in *network.txt*, with MFPTs in real time (iterations * tau). They answer slightly different questions and need not agree exactly; for a precise rate of one transition, a run targeted at it is the better estimate.'''))
         nb.cells.append(nbf.v4.new_code_cell('''network_opts = {
     **analsyis_opts,
-    'step-iter': 1          # Plots the rates by using traces from 1 to every Xth iteration
+    'tau': ''' + repr(self.tau) + ''',             # real time per WE iteration (sampling_options.tau)
+    'step-iter': 1,         # Evaluate the rates and MFPTs every N iterations
+    'matrix': True,         # Also the transition matrix and its MFPTs
 }'''))
         nb.cells.append(nbf.v4.new_code_cell('''os.chdir("..")
 net_obj = wb.network.weNetwork(network_opts)
@@ -2145,34 +2163,6 @@ any binning scheme.'''))
 flux_obj = wb.flux.weFlux(flux_opts)
 try:
     f, ax = flux_obj.run()
-except Exception as e:
-    print(e)
-os.chdir(curr_path)'''))
-        nb.cells.append(nbf.v4.new_markdown_cell('''## PCCA Analysis
-This analysis requires *states.yaml* (from the cluster analysis, or assigned by hand)
-and calls `w_assign` then `w_reweight` to build a per-bin transition matrix. It computes
-mean first-passage times (MFPT) between the macrostates named in *states.yaml*, and
-separately runs an unsupervised GPCCA+ (`pygpcca`) coarse-graining of the same transition
-matrix as a diagnostic. The two are intentionally not reconciled: GPCCA+'s numbered clusters
-are not automatically mapped onto your states.yaml labels -- compare the two Voronoi plots
-yourself to see whether your labeled regions line up with what the dynamics actually look
-like. MFPT values are already converted to real time (iterations * tau) using whatever tau
-you set below -- if tau is in seconds, these values are in seconds. This is a time, not a
-rate, so it is never "tau^-1" (that notation describes rates, like the ones evolution/flux
-report).'''))
-        nb.cells.append(nbf.v4.new_code_cell('''pcca_opts = {
-    **analsyis_opts,
-    'sampling_options': {'tau': 10},  # tau = real time per WE iteration (e.g. seconds). pcca always reads tau from here, matching sampling_options in your main webng yaml
-    'n-clusters': None,      # Number of GPCCA+ macrostates to look for. 'None' defaults to the number of states.yaml labels
-    'step-iter': 5,          # Evaluate cumulative MFPT convergence every N iterations
-    'mfpt-pairs': None,      # List of [source_label, target_label] pairs to compute MFPT for. 'None' computes every ordered pair of states.yaml labels
-    'movement-h5': None,     # Optional path to a separate west.h5 (e.g. an earlier adaptive-binning phase) to load Voronoi bin centers from. 'None' uses this run's own west.h5
-}
-# Note: burn-in is just 'first-iter' above (from analsyis_opts) -- no separate option needed.'''))
-        nb.cells.append(nbf.v4.new_code_cell('''os.chdir("..")
-pcca_obj = wb.pcca.wePCCA(pcca_opts)
-try:
-    results = pcca_obj.run()
 except Exception as e:
     print(e)
 os.chdir(curr_path)'''))

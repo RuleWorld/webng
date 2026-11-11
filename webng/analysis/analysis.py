@@ -364,7 +364,7 @@ class weAnalysis:
 
     def ensure_assign(self):
         """
-        assign.h5 from states.yaml, shared by network and pcca. Returns its
+        assign.h5 from states.yaml, for network. Returns its
         stamp, which outputs built from it include in their own, and sets
         self.assign_path to the file to use.
 

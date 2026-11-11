@@ -1,12 +1,13 @@
 """
-Tests for the analysis tools' own logic -- cluster, network, flux, and pcca's
-math -- with no WESTPA tools and no simulation.
+Tests for the analysis tools' own logic -- cluster (dbscan and gpcca),
+network (w_direct and the transition matrix), flux, and the Markov-model math
+they share -- with no WESTPA tools and no simulation.
 
 cluster, network, and flux run their real run() methods: each test writes the
-file the WESTPA tool would have produced (pdist.h5, assign.h5, direct.h5,
-fluxanl.h5), stamped as built from the current inputs, so the analysis cache
-reuses it instead of running the tool. pcca's numerical pieces are checked
-directly, each against an answer worked out by hand.
+file the WESTPA tool would have produced (pdist.h5, assign_bins.h5, assign.h5,
+direct.h5, fluxanl.h5), stamped as built from the current inputs, so
+the analysis cache reuses it instead of running the tool. The math in
+webng.analysis.markov is checked directly, against answers worked out by hand.
 """
 import os
 import pickle
@@ -22,7 +23,7 @@ from webng.analysis.average import weAverage
 from webng.analysis.cluster import weCluster
 from webng.analysis.flux import weFlux
 from webng.analysis.network import weNetwork
-from webng.analysis.pcca import wePCCA
+from webng.analysis import markov
 from conftest import CI_DTYPE, write_stamped, write_west
 
 
@@ -88,7 +89,8 @@ def test_network_plots_named_fields_at_each_windows_end(analysis_sim):
         f.write("states:\n  - label: SC\n    coords:\n      - [0.0, 0.0]\n"
                 "  - label: TE\n    coords:\n      - [9.0, 9.0]\n")
     n = weNetwork({"sim_name": "sim", "work-path": None, "pcoords": ["A", "B"],
-                   "tau": 10, "step-iter": 5, "first-iter": None, "last-iter": None})
+                   "tau": 10, "step-iter": 5, "matrix": False,
+                   "first-iter": None, "last-iter": None})
 
     # two evaluation windows, deliberately uneven: ending at iterations 4 and 10
     rates = np.zeros((2, 2, 2), dtype=CI_DTYPE)
@@ -192,64 +194,68 @@ def test_several_target_lines_are_one_sink(analysis_sim):
         [total[:min(5 * (k + 1), N_ITER)].mean() for k in range(8)], **close)
 
 # ===========================================================================
-# pcca math
+# Markov-model math (webng.analysis.markov)
 # ===========================================================================
 
-@pytest.fixture
-def pcca():
-    # the math methods don't depend on __init__ (which needs a full sim)
-    return wePCCA.__new__(wePCCA)
-
-
-# ---------------------------------------------------------------------------
-# stationary probabilities
-# ---------------------------------------------------------------------------
-
-def test_stationary_prob_two_state(pcca):
+def test_stationary_two_state():
     # leave state 0 with p=0.2, leave state 1 with p=0.1  ->  pi = (1/3, 2/3)
     T = np.array([[0.8, 0.2],
                   [0.1, 0.9]])
-    assert pcca.stationary_prob(T, 2) == pytest.approx([1 / 3, 2 / 3])
+    assert markov.stationary(T) == pytest.approx([1 / 3, 2 / 3])
 
-
-# ---------------------------------------------------------------------------
-# mean first passage times
-# ---------------------------------------------------------------------------
 
 # 0 -> 1 -> 2, each step taken with probability 1/2, absorbing at 2.
 # By hand: m1 = 1 + m1/2  ->  m1 = 2;   m0 = 1 + m0/2 + m1/2  ->  m0 = 4.
 CHAIN = np.array([[0.5, 0.5, 0.0],
                   [0.0, 0.5, 0.5],
                   [0.0, 0.0, 1.0]])
-EACH_BIN_ITS_OWN_STATE = np.array([0, 1, 2])
-IDENTITY_MAP = {0: 0, 1: 1, 2: 2}
+UNIFORM = np.full(3, 1 / 3)
 
 
 @pytest.mark.parametrize("source, expected", [(0, 4.0), (1, 2.0)])
-def test_mfpt_hand_solved_chain(pcca, source, expected):
-    stat = np.full(3, 1 / 3)
-    mfpt = pcca.compute_mfpt_pair(CHAIN, 3, IDENTITY_MAP, EACH_BIN_ITS_OWN_STATE,
-                                  source, 2, stat)
-    assert mfpt == pytest.approx(expected)
+def test_mfpt_hand_solved_chain(source, expected):
+    src = np.arange(3) == source
+    assert markov.mfpt(CHAIN, UNIFORM, src, np.arange(3) == 2) == pytest.approx(expected)
 
 
-def test_mfpt_source_spread_over_bins_is_stationary_weighted(pcca):
-    # source state covers bins 0 and 1, weighted 1:3 by stationary probability
-    assignments = np.array([0, 0, 1])
-    stat = np.array([0.1, 0.3, 0.6])
-    mfpt = pcca.compute_mfpt_pair(CHAIN, 3, IDENTITY_MAP, assignments, 0, 1, stat)
-    assert mfpt == pytest.approx(0.25 * 4.0 + 0.75 * 2.0)
+def test_mfpt_source_spread_over_bins_is_stationary_weighted():
+    # source covers bins 0 and 1, weighted 1:3 by stationary probability
+    pi = np.array([0.1, 0.3, 0.6])
+    m = markov.mfpt(CHAIN, pi, np.array([True, True, False]), np.array([False, False, True]))
+    assert m == pytest.approx(0.25 * 4.0 + 0.75 * 2.0)
 
 
-def test_mfpt_missing_target_is_nan(pcca):
-    mfpt = pcca.compute_mfpt_pair(CHAIN, 3, IDENTITY_MAP, EACH_BIN_ITS_OWN_STATE,
-                                  0, 7, np.full(3, 1 / 3))
-    assert np.isnan(mfpt)
+def test_mfpt_missing_target_is_nan():
+    assert np.isnan(markov.mfpt(CHAIN, UNIFORM, np.arange(3) == 0, np.zeros(3, bool)))
 
 
-# ---------------------------------------------------------------------------
-# reversible estimate for GPCCA+ (flux symmetrization)
-# ---------------------------------------------------------------------------
+def test_active_set_drops_bins_the_chain_never_returns_from():
+    C = np.array([[5.0, 1.0, 0.0, 0.0],
+                  [1.0, 5.0, 0.0, 0.0],
+                  [1.0, 0.0, 0.0, 0.0],      # bin 2 only ever leaves
+                  [0.0, 0.0, 0.0, 0.0]])     # bin 3 never visited
+    assert list(markov.active_set(C)) == [0, 1]
+
+
+def test_coarse_graining_onto_states():
+    # symmetric with unit row sums, so every bin's stationary probability is 1/4
+    T = np.array([[0.7, 0.2, 0.1, 0.0],
+                  [0.2, 0.6, 0.1, 0.1],
+                  [0.1, 0.1, 0.6, 0.2],
+                  [0.0, 0.1, 0.2, 0.7]])
+    P, p, nb = markov.coarse_grain(T, np.full(4, 0.25), np.array([0, 0, 1, 1]), 2)
+    # A -> B = (T02 + T03 + T12 + T13) / 2 = (0.1 + 0.0 + 0.1 + 0.1) / 2
+    assert P == pytest.approx(np.array([[0.85, 0.15], [0.15, 0.85]]))
+    assert p == pytest.approx([0.5, 0.5])
+    assert list(nb) == [2, 2]
+
+
+def test_bins_outside_every_state_belong_to_none():
+    T = np.full((4, 4), 0.25)
+    P, p, nb = markov.coarse_grain(T, np.full(4, 0.25), np.array([0, -1, 1, 1]), 2)
+    assert list(nb) == [1, 2]
+    assert p == pytest.approx([0.25, 0.5])
+
 
 def _nonreversible_T(n=6, seed=3):
     rng = np.random.default_rng(seed)
@@ -257,17 +263,10 @@ def _nonreversible_T(n=6, seed=3):
     return T / T.sum(axis=1, keepdims=True)
 
 
-def _stationary(T):
-    ev, evec = np.linalg.eig(T.T)
-    p = np.abs(np.real(evec[:, np.argmin(np.abs(ev - 1.0))]))
-    return p / p.sum()
-
-
 def test_reversible_by_flux_keeps_pi_and_detailed_balance():
-    from webng.analysis.pcca import reversible_by_flux
     T = _nonreversible_T()
-    T_rev, pi = reversible_by_flux(T)
-    assert pi == pytest.approx(_stationary(T))
+    T_rev, pi = markov.reversible_by_flux(T)
+    assert pi == pytest.approx(markov.stationary(T))
     assert T_rev.sum(axis=1) == pytest.approx(np.ones(len(T)))
     assert pi @ T_rev == pytest.approx(pi)                      # same stationary distribution
     F = pi[:, None] * T_rev
@@ -279,146 +278,226 @@ def test_averaging_with_transpose_loses_pi():
     T = _nonreversible_T()
     S = (T + T.T) / 2.0
     S = S / S.sum(axis=1, keepdims=True)
-    assert np.abs(_stationary(S) - _stationary(T)).max() > 0.05
+    assert np.abs(markov.stationary(S) - markov.stationary(T)).max() > 0.05
 
 
-def test_gpcca_diagnostic_separates_a_rare_metastable_state(pcca, monkeypatch, tmp_path):
-    """Three metastable groups of three bins; group C holds ~1e-4 of the
-    probability (like LN2 in the 8-gene model). GPCCA+ must give it its own cluster."""
-    pytest.importorskip("pygpcca")
+def _three_metastable_groups():
+    """Nine bins in three metastable groups of three; group 2 holds ~1e-4 of
+    the probability (like LN2 in the 8-gene model). Returns (T, groups)."""
     groups = np.repeat([0, 1, 2], 3)
-    out_rate = {0: 2e-3, 1: 5e-3, 2: 5e-2}              # C is left quickly ...
+    out_rate = {0: 2e-3, 1: 5e-3, 2: 5e-2}              # group 2 is left quickly ...
     T = np.zeros((9, 9))
     for i in range(9):
         g = groups[i]
-        for j in range(9):
-            if groups[j] == g:
-                T[i, j] = (1 - out_rate[g]) / 3
-        others = [j for j in range(9) if groups[j] != g]
-        for j in others:
-            T[i, j] = out_rate[g] / len(others)
+        T[i, groups == g] = (1 - out_rate[g]) / 3
+        others = groups != g
+        T[i, others] = out_rate[g] / others.sum()
     T[np.ix_(groups != 2, groups == 2)] *= 1e-2          # ... and entered rarely
-    T = T / T.sum(axis=1, keepdims=True)
-    assert _stationary(T)[groups == 2].sum() < 1e-3
+    return T / T.sum(axis=1, keepdims=True), groups
 
-    pcca.n_clusters = 3
-    monkeypatch.setattr(pcca, "plot_voronoi", lambda *a, **k: None)
-    result, lines = pcca.run_gpcca_diagnostic(T, np.zeros((9, 2)), str(tmp_path))
-    assert result is not None, lines
-    a = result["assignments"]
-    for g in range(3):
-        assert len(set(a[groups == g])) == 1             # each group is one cluster
-    assert len({a[groups == g][0] for g in range(3)}) == 3   # and the three are distinct
-    assert sorted(result["coarse_grained_stationary_probability"])[0] < 1e-3
+
+@pytest.mark.parametrize("n_clusters", [3, None])
+def test_gpcca_states_separate_a_rare_metastable_state(n_clusters):
+    """GPCCA+ must give each group its own state, the rare one included, with
+    its true (tiny) stationary probability; with n_clusters None it should
+    choose three by crispness."""
+    pytest.importorskip("pygpcca")
+    T, groups = _three_metastable_groups()
+    pi = markov.stationary(T)
+    assert pi[groups == 2].sum() < 1e-3
+    g = markov.gpcca_states(pi[:, None] * T, n_clusters=n_clusters)    # counts ~ stationary flux
+    assert g["n_states"] == 3
+    labels = g["labels"]
+    for grp in range(3):
+        assert len(set(labels[groups == grp])) == 1                    # one state per group
+    assert len({labels[groups == grp][0] for grp in range(3)}) == 3
+    assert labels[groups == 2][0] == 2                                  # numbered by probability
+    _, p, _ = markov.coarse_grain(g["T"], g["pi"], labels, 3)
+    assert p[2] == pytest.approx(pi[groups == 2].sum(), rel=1e-6)
 
 
 # ---------------------------------------------------------------------------
-# transition matrix from w_reweight's tmat.h5
+# bin-to-bin transition counts from w_assign output
 # ---------------------------------------------------------------------------
 
-def _write_tmat(path, per_iteration, nbins, nstates):
+def _write_run(sim, T, n_iter, rep):
     """
-    tmat.h5 in w_reweight's layout: the matrix is history-augmented, nbins x
-    nstates rows, row r being bin r // nstates with last-visited state
-    r % nstates (as WESTPA's bin_state_map / bin_last_state_map lay it out).
-    `per_iteration` maps n_iter -> dense nbins x nbins flux matrix; each
-    bin-level entry is spread over several of its (state, state) sub-cells,
-    including the last state, so the sub-cells sum back to it.
+    A west.h5 and the matching bin assignments of a run that moves exactly as
+    the transition matrix T says: every iteration, one segment per (i, j)
+    with T_ij > 0, weighted pi_i T_ij, from bin i to bin j. A walker in bin b
+    sits at the progress coordinate rep[b]. Returns the assignments, nsegs,
+    npts that w_assign would write.
     """
-    shares = [(0, 0, 0.4), (nstates - 1, 0, 0.3), (nstates - 1, nstates - 1, 0.2), (0, nstates - 1, 0.1)]
-    with h5py.File(path, "w") as f:
-        f.attrs["nrows"] = nstates * nbins
-        f.attrs["ncols"] = nstates * nbins
-        iters = sorted(per_iteration)
-        f.attrs["iter_start"] = iters[0]
-        f.attrs["iter_stop"] = iters[-1] + 1
-        for n_iter, flux in per_iteration.items():
-            rows, cols, vals = [], [], []
-            for bi in range(nbins):
-                for bj in range(nbins):
-                    if flux[bi, bj]:
-                        for r, c, share in shares:
-                            rows.append(nstates * bi + r)
-                            cols.append(nstates * bj + c)
-                            vals.append(share * flux[bi, bj])
-            g = f.create_group("iterations/iter_{:08d}".format(n_iter))
-            g["rows"], g["cols"], g["flux"] = np.array(rows), np.array(cols), np.array(vals)
+    pi = markov.stationary(T)
+    pairs = [(i, j) for i in range(len(T)) for j in range(len(T)) if T[i, j] > 0]
+    w = np.array([pi[i] * T[i, j] for i, j in pairs])
+    seg_dtype = np.dtype([("weight", np.float64), ("parent_id", np.int64)])
+    with h5py.File(os.path.join(sim, "west.h5"), "w") as f:
+        f.attrs["west_current_iteration"] = n_iter + 1
+        for n in range(1, n_iter + 1):
+            g = f.create_group("iterations/iter_{:08d}".format(n))
+            seg = np.zeros(len(pairs), dtype=seg_dtype)
+            seg["weight"] = w
+            g["seg_index"] = seg
+            g["pcoord"] = np.array([[rep[i], rep[j]] for i, j in pairs], dtype=np.float32)
+    asg = np.array([[[i, j] for i, j in pairs]] * n_iter, dtype=np.uint16)
+    return asg, np.full(n_iter, len(pairs)), np.full(n_iter, 2)
 
 
-@pytest.mark.parametrize("nstates", [2, 4])
-def test_transition_matrix_averaged_and_row_normalized(pcca, tmp_path, nstates):
-    """Grouping w_reweight's rows must follow the number of states (a fixed 2
-    only worked for two-state analyses)."""
-    it1 = np.array([[3.0, 1.0, 0.0],
-                    [1.0, 1.0, 0.0],
-                    [0.0, 0.0, 0.0]])      # bin 2 never visited
-    it2 = np.array([[1.0, 3.0, 0.0],
-                    [0.0, 2.0, 0.0],
-                    [0.0, 0.0, 0.0]])
-    _write_tmat(tmp_path / "tmat.h5", {1: it1, 2: it2}, nbins=3, nstates=nstates)
-    tm_norm, all_iter_tms, nbins = pcca.build_transition_matrix(str(tmp_path / "tmat.h5"),
-                                                                 nstates=nstates)
-    assert nbins == 3
-    assert all_iter_tms[1] == pytest.approx(it1)      # sub-cells summed back to bins
-    avg = (it1 + it2) / 2
-    assert tm_norm[0] == pytest.approx(avg[0] / avg[0].sum())
-    assert tm_norm[1] == pytest.approx(avg[1] / avg[1].sum())
-    assert tm_norm[:2].sum(axis=1) == pytest.approx([1.0, 1.0])
-    assert not tm_norm[2].any()                        # unvisited stays zero
+def _stamp_bins(path, stamp, asg, nsegs, npts, nbins):
+    write_stamped(path, stamp, assignments=asg, nsegs=nsegs, npts=npts)
+    with h5py.File(path, "a") as f:
+        f.attrs["nbins"] = nbins
+        f.attrs["iter_start"] = 1
 
 
-def test_transition_matrix_rejects_a_shape_that_doesnt_fit(pcca, tmp_path):
-    _write_tmat(tmp_path / "tmat.h5", {1: np.eye(3)}, nbins=3, nstates=4)    # 12 rows
-    with pytest.raises(ValueError, match="states"):
-        pcca.build_transition_matrix(str(tmp_path / "tmat.h5"), nstates=5)
+def test_bin_flux_from_assignments(tmp_path):
+    T = CHAIN.copy()
+    T[2] = [0.5, 0.0, 0.5]                    # make it recurrent
+    rep = np.array([[0.0, 0.0], [1.0, 10.0], [2.0, 20.0]])
+    asg, nsegs, npts = _write_run(str(tmp_path), T, 4, rep)
+    _stamp_bins(str(tmp_path / "assign.h5"), "x", asg, nsegs, npts, 3)
+    C, points, visited = markov.bin_flux_from_assignments(
+        str(tmp_path / "assign.h5"), str(tmp_path / "west.h5"), 2, 4)
+    pi = markov.stationary(T)
+    assert C == pytest.approx(3 * pi[:, None] * T)          # 3 iterations of stationary flux
+    assert markov.row_normalize(C) == pytest.approx(T)
+    assert visited.all()
+    assert points == pytest.approx(rep)                     # a real point inside each bin
 
 
 # ---------------------------------------------------------------------------
-# coarse-graining onto the states.yaml partition
+# cluster, method gpcca
 # ---------------------------------------------------------------------------
 
-def test_states_yaml_coarse_graining(pcca):
-    # symmetric with unit row sums, so every bin's stationary probability is 1/4
-    T = np.array([[0.7, 0.2, 0.1, 0.0],
-                  [0.2, 0.6, 0.1, 0.1],
-                  [0.1, 0.1, 0.6, 0.2],
-                  [0.0, 0.1, 0.2, 0.7]])
-    assignments = np.array([0, 0, 1, 1])      # bins 0,1 -> A; bins 2,3 -> B
-    result, _ = pcca.summarize_states_yaml_partition(T, assignments, {0: "A", 1: "B"})
-    # A -> B = (T02 + T03 + T12 + T13) / 2 = (0.1 + 0.0 + 0.1 + 0.1) / 2
-    assert result["transition_matrix"] == pytest.approx(np.array([[0.85, 0.15], [0.15, 0.85]]))
-    assert result["stationary_probability"] == pytest.approx([0.5, 0.5])
-    assert list(result["bin_counts"]) == [2, 2]
-    assert result["state_order"] == ["A", "B"]
+@pytest.mark.parametrize("n_clusters", [3, None])
+def test_cluster_gpcca_writes_states_of_whole_bins(analysis_sim, n_clusters):
+    pytest.importorskip("pygpcca")
+    sim = analysis_sim()
+    T, groups = _three_metastable_groups()
+    rep = np.array([[float(b), 10.0 * b] for b in range(9)])
+    asg, nsegs, npts = _write_run(str(sim), T, 10, rep)
+    c = weCluster({"sim_name": "sim", "work-path": None, "pcoords": ["A", "B"],
+                   "method": "gpcca", "n-clusters": n_clusters,
+                   "first-iter": None, "last-iter": None})
+    # cwd is now the analysis folder (weAnalysis.__init__ moved there)
+    _stamp_bins("assign_bins.h5", c.stamp("w_assign bins"), asg, nsegs, npts, 9)
+    c.run()
+
+    with open(sim / "analysis" / "states.yaml") as f:
+        states = yaml.safe_load(f)["states"]
+    assert [s["label"] for s in states] == ["state0", "state1", "state2"]
+    found = sorted(sorted(map(tuple, s["coords"])) for s in states)
+    assert found == sorted(sorted(tuple(rep[b]) for b in np.nonzero(groups == g)[0]) for g in range(3))
+    # the least probable state is the rare group, and it is reported as such
+    assert sorted(map(tuple, states[2]["coords"])) == sorted(tuple(rep[b]) for b in (6, 7, 8))
+    report = (sim / "analysis" / "cluster_gpcca.txt").read_text()
+    assert "3 states" in report and "network" in report
 
 
-def test_unlabeled_bins_belong_to_no_state(pcca):
-    T = np.array([[0.7, 0.2, 0.1, 0.0],
-                  [0.2, 0.6, 0.1, 0.1],
-                  [0.1, 0.1, 0.6, 0.2],
-                  [0.0, 0.1, 0.2, 0.7]])
-    assignments = np.array([0, -999, 1, 1])  # bin 1 outside every state
-    result, _ = pcca.summarize_states_yaml_partition(T, assignments, {0: "A", 1: "B"})
-    assert list(result["bin_counts"]) == [1, 2]
-    assert result["stationary_probability"] == pytest.approx([0.25, 0.5])
+def test_cluster_rejects_an_unknown_method(analysis_sim):
+    analysis_sim()
+    with pytest.raises(ValueError, match="method"):
+        weCluster({"sim_name": "sim", "work-path": None, "pcoords": ["A", "B"],
+                   "method": "kmeans", "first-iter": None, "last-iter": None})
 
 
 # ---------------------------------------------------------------------------
-# bin -> state assignment from w_assign's assign.h5
+# network: the transition matrix (from assign.h5) and its MFPTs
 # ---------------------------------------------------------------------------
 
-def test_state_assignment_reads_state_map(pcca, tmp_path):
+def _network_with_matrix(analysis_sim, T, state_map, labels=("A", "B"), tau=10, n_iter=10):
+    """
+    weNetwork over a run that moves exactly as T says (see _write_run), with
+    w_assign's assign.h5 (bins mapped to states by `state_map`) and w_direct's
+    direct.h5 prepared, so neither tool runs.
+    """
+    sim = analysis_sim(current_iteration=n_iter + 1)
+    with open(sim / "analysis" / "states.yaml", "w") as f:
+        yaml.safe_dump({"states": [{"label": l, "coords": [[float(k), 0.0]]}
+                                   for k, l in enumerate(labels)]}, f)
+    rep = np.array([[float(b), 0.0] for b in range(len(T))])
+    asg, nsegs, npts = _write_run(str(sim), T, n_iter, rep)
+    n = weNetwork({"sim_name": "sim", "work-path": None, "pcoords": ["A", "B"],
+                   "tau": tau, "step-iter": 1, "first-iter": None, "last-iter": None})
+    ns = len(labels)
+    assign_stamp = n.stamp("w_assign", states_yaml=n.file_digest("states.yaml"))
+    write_stamped("assign.h5", assign_stamp, assignments=asg, nsegs=nsegs, npts=npts,
+                  state_map=np.array(list(state_map) + [ns]),
+                  state_labels=np.array([l.encode() for l in labels]))
+    with h5py.File("assign.h5", "a") as f:
+        f.attrs["nstates"], f.attrs["nbins"], f.attrs["iter_start"] = ns, len(T), 1
+    rates = np.zeros((2, ns, ns), dtype=CI_DTYPE)
+    rates["iter_start"] = 1
+    rates["iter_stop"][0], rates["iter_stop"][1] = 5, 10      # two evaluation windows
+    rates["expected"] = 0.05
+    write_stamped("direct.h5", n.stamp("w_direct", assign=assign_stamp, first_iter=int(n.first_iter),
+                                       last_iter=int(n.last_iter), step_iter=n.step_iter),
+                  rate_evolution=rates)
+    return sim, n
+
+
+# a 3-bin cycle, each step taken with probability 1/2: pi uniform
+CYCLE = np.array([[0.5, 0.5, 0.0],
+                  [0.0, 0.5, 0.5],
+                  [0.5, 0.0, 0.5]])
+
+
+def test_network_matrix_mfpts_hand_solved(analysis_sim):
+    """A = bins {0, 1}, B = bin 2. To B: m1 = 2, m0 = 1 + m0/2 + m1/2 -> m0 = 4,
+    so A -> B = (4 + 2)/2 = 3 steps; B -> A: m2 = 1 + m2/2 = 2 steps."""
+    sim, n = _network_with_matrix(analysis_sim, CYCLE, state_map=[0, 0, 1], tau=10)
+    n.run()
+    m = n.result["matrix"]
+    assert m["mfpt"][(0, 1)][0] == pytest.approx(30.0)
+    assert m["mfpt"][(1, 0)][0] == pytest.approx(20.0)
+    assert m["state_prob"] == pytest.approx([2 / 3, 1 / 3])
+    # A leaves to B only from bin 1 (half its probability) with p = 1/2
+    assert m["transition_matrix"] == pytest.approx(np.array([[0.75, 0.25], [0.5, 0.5]]))
+    report = (sim / "analysis" / "network.txt").read_text()
+    assert "A -> B" in report and "30" in report
+    assert "200" in report                               # direct: tau / rate = 10 / 0.05
+
+
+def test_network_matrix_uses_only_the_analysis_iterations(analysis_sim):
+    """first-iter/last-iter bound the matrix's iterations as they do w_direct's."""
+    sim, n = _network_with_matrix(analysis_sim, CYCLE, state_map=[0, 0, 1], tau=10)
+    seen = [i for i, _ in markov.iter_bin_flux("assign.h5", n.west_path, 3, 7)]
+    assert seen == [3, 4, 5, 6, 7]
+    os.chdir(n.curr_path)
+
+
+def test_state_assignment_reads_state_map(tmp_path):
     with h5py.File(tmp_path / "assign.h5", "w") as f:
         f["state_labels"] = np.array([b"SC", b"TE"])
         # w_assign marks bins outside every state with an index past the last
         # state; state_map can also run longer than the number of bins
         f["state_map"] = np.array([0, 2, 1, 1, 0, 2])
-    assignments, labels = pcca.load_bin_state_assignment(str(tmp_path / "assign.h5"), 5)
-    assert list(assignments) == [0, -999, 1, 1, 0]
-    assert labels == {0: "SC", 1: "TE"}
+    labels, names = weNetwork.load_bin_state_assignment(str(tmp_path / "assign.h5"), 5)
+    assert list(labels) == [0, -1, 1, 1, 0]
+    assert names == {0: "SC", 1: "TE"}
+
+
+# ---------------------------------------------------------------------------
+# the analyses dispatcher
+# ---------------------------------------------------------------------------
+
+def test_a_pcca_block_says_where_pcca_went(tmp_path):
+    from webng.core.weAnalysis import weAnalysis as Dispatcher
+    opts = {"analyses": {"enabled": True, "analysis_bins": 10, "first-iter": None,
+                         "last-iter": None, "pcca": {"enabled": True}},
+            "sampling_options": {"tau": 10}}
+    (tmp_path / "opts.yaml").write_text(yaml.safe_dump(opts))
+
+    class Args:
+        pass
+    args = Args()
+    args.opts = str(tmp_path / "opts.yaml")
+    with pytest.raises(SystemExit, match="method: gpcca"):
+        Dispatcher(args).run()
 
 # ===========================================================================
-# stored bin mappers (weAnalysis.load_run_mapper), used by average and pcca
+# stored bin mappers (weAnalysis.load_run_mapper), used by average
 # ===========================================================================
 
 SYSTEM_PY = """
@@ -516,15 +595,4 @@ def test_average_reads_the_binning_style_from_the_stored_mapper(tmp_path, monkey
     finally:
         av.h5file.close()
         os.chdir(av.curr_path)
-        sys.modules.pop("system", None)
-
-
-def test_pcca_centers_need_voronoi_bins(tmp_path, monkeypatch):
-    sim = _sim_with_stored_mapper(tmp_path, "at import", lambda s: s.Rect([[0, 1]]))
-    p = wePCCA.__new__(wePCCA)
-    p.sim_path, p.west_path = str(sim), str(sim / "west.h5")
-    try:
-        with pytest.raises(ValueError, match="adaptive \\(Voronoi\\) binning"):
-            p.load_final_centers(p.west_path)
-    finally:
         sys.modules.pop("system", None)

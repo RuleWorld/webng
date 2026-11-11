@@ -2,7 +2,7 @@
 Helpers shared by WEBNG's analysis tools:
 
   load_mapper   the bin mapper a run stored in its west.h5 (used by average
-                and pcca, through weAnalysis.load_run_mapper)
+                through weAnalysis.load_run_mapper)
   voronoi       Voronoi cell edges for drawing adaptive bins (average)
 """
 import os

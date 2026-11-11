@@ -1,6 +1,6 @@
 import sys, yaml
 from yaml import Loader
-from webng.analysis import weAverage, weEvolution, weCluster, weNetwork, weFlux, wePCCA
+from webng.analysis import weAverage, weEvolution, weCluster, weNetwork, weFlux
 
 
 class weAnalysis:
@@ -85,6 +85,7 @@ class weAnalysis:
                         clust_dict["first-iter"] = first_iter
                         clust_dict["last-iter"] = last_iter
                         clust_dict["n-workers"] = n_workers
+                        clust_dict["assign-h5"] = assign_h5     # method gpcca: bins from it
                         weCluster(clust_dict).run()
                 if "network" in analysis_list:
                     net_dict = analysis_dict["network"]
@@ -117,16 +118,9 @@ class weAnalysis:
                         flux_dict["first-iter"] = first_iter
                         flux_dict["last-iter"]  = last_iter
                         weFlux(flux_dict).run()
-                if "pcca" in analysis_list:
-                    pcca_dict = analysis_dict["pcca"]
-                    if self._getd(pcca_dict, "enabled", default=True):
-                        print("running analysis: pcca")
-                        pcca_dict["pcoords"]    = self.opts["propagator_options"]["pcoords"]
-                        pcca_dict["sim_name"]   = self.opts["path_options"]["sim_name"]
-                        pcca_dict["work-path"]  = work_path
-                        pcca_dict["first-iter"] = first_iter
-                        pcca_dict["last-iter"]  = last_iter
-                        pcca_dict["n-workers"] = n_workers
-                        pcca_dict["assign-h5"] = assign_h5
-                        pcca_dict["sampling_options"] = self.opts["sampling_options"]
-                        wePCCA(pcca_dict).run()
+                if "pcca" in analysis_list and (analysis_dict["pcca"] or {}).get("enabled", True):
+                    sys.exit(
+                        "analyses: pcca has been merged into the other tools. For GPCCA+ "
+                        "states use cluster with method: gpcca (and n-clusters), then network, "
+                        "which now reports the transition matrix and its MFPTs along with "
+                        "w_direct's rates. Remove the pcca block (or set enabled: false).")
