@@ -248,6 +248,71 @@ def test_mfpt_missing_target_is_nan(pcca):
 
 
 # ---------------------------------------------------------------------------
+# reversible estimate for GPCCA+ (flux symmetrization)
+# ---------------------------------------------------------------------------
+
+def _nonreversible_T(n=6, seed=3):
+    rng = np.random.default_rng(seed)
+    T = rng.random((n, n)) ** 3          # uneven, so pi is far from uniform
+    return T / T.sum(axis=1, keepdims=True)
+
+
+def _stationary(T):
+    ev, evec = np.linalg.eig(T.T)
+    p = np.abs(np.real(evec[:, np.argmin(np.abs(ev - 1.0))]))
+    return p / p.sum()
+
+
+def test_reversible_by_flux_keeps_pi_and_detailed_balance():
+    from webng.analysis.pcca import reversible_by_flux
+    T = _nonreversible_T()
+    T_rev, pi = reversible_by_flux(T)
+    assert pi == pytest.approx(_stationary(T))
+    assert T_rev.sum(axis=1) == pytest.approx(np.ones(len(T)))
+    assert pi @ T_rev == pytest.approx(pi)                      # same stationary distribution
+    F = pi[:, None] * T_rev
+    assert F == pytest.approx(F.T)                              # detailed balance
+
+
+def test_averaging_with_transpose_loses_pi():
+    """Why GPCCA+ no longer uses (T + T^T) / 2: its stationary distribution is not pi."""
+    T = _nonreversible_T()
+    S = (T + T.T) / 2.0
+    S = S / S.sum(axis=1, keepdims=True)
+    assert np.abs(_stationary(S) - _stationary(T)).max() > 0.05
+
+
+def test_gpcca_diagnostic_separates_a_rare_metastable_state(pcca, monkeypatch, tmp_path):
+    """Three metastable groups of three bins; group C holds ~1e-4 of the
+    probability (like LN2 in the 8-gene model). GPCCA+ must give it its own cluster."""
+    pytest.importorskip("pygpcca")
+    groups = np.repeat([0, 1, 2], 3)
+    out_rate = {0: 2e-3, 1: 5e-3, 2: 5e-2}              # C is left quickly ...
+    T = np.zeros((9, 9))
+    for i in range(9):
+        g = groups[i]
+        for j in range(9):
+            if groups[j] == g:
+                T[i, j] = (1 - out_rate[g]) / 3
+        others = [j for j in range(9) if groups[j] != g]
+        for j in others:
+            T[i, j] = out_rate[g] / len(others)
+    T[np.ix_(groups != 2, groups == 2)] *= 1e-2          # ... and entered rarely
+    T = T / T.sum(axis=1, keepdims=True)
+    assert _stationary(T)[groups == 2].sum() < 1e-3
+
+    pcca.n_clusters = 3
+    monkeypatch.setattr(pcca, "plot_voronoi", lambda *a, **k: None)
+    result, lines = pcca.run_gpcca_diagnostic(T, np.zeros((9, 2)), str(tmp_path))
+    assert result is not None, lines
+    a = result["assignments"]
+    for g in range(3):
+        assert len(set(a[groups == g])) == 1             # each group is one cluster
+    assert len({a[groups == g][0] for g in range(3)}) == 3   # and the three are distinct
+    assert sorted(result["coarse_grained_stationary_probability"])[0] < 1e-3
+
+
+# ---------------------------------------------------------------------------
 # transition matrix from w_reweight's tmat.h5
 # ---------------------------------------------------------------------------
 

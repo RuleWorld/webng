@@ -18,6 +18,35 @@ warnings.filterwarnings("ignore")
 np.set_printoptions(precision=4, suppress=True)
 
 
+def reversible_by_flux(T):
+    """
+    Reversible (detailed-balance) estimate of a transition matrix that keeps
+    its stationary distribution: symmetrize the stationary flux
+    F_ij = pi_i T_ij as (F + F^T) / 2 and renormalize each row.
+
+    T is row-normalized here first (rows of a submatrix need not sum to 1).
+    Returns (T_rev, pi), with pi T_rev = pi and pi_i T_rev_ij = pi_j T_rev_ji.
+    Rows whose stationary flux is zero (bins the chain never returns to) keep
+    their original transition probabilities.
+
+    Averaging T with its transpose instead, (T + T^T) / 2, also gives a
+    symmetric matrix, but its stationary distribution is no longer pi: it
+    weights every bin about equally, which can merge or split metastable
+    states regardless of how much probability they hold.
+    """
+    T = np.asarray(T, dtype=float)
+    rs = T.sum(axis=1)
+    T = np.divide(T, rs[:, None], out=np.zeros_like(T), where=rs[:, None] > 0)
+    ev, evec = np.linalg.eig(T.T)
+    pi = np.abs(np.real(evec[:, np.argmin(np.abs(ev - 1.0))]))
+    pi = pi / pi.sum()
+    F = pi[:, None] * T
+    F = (F + F.T) / 2.0
+    fs = F.sum(axis=1)
+    T_rev = np.divide(F, fs[:, None], out=T.copy(), where=fs[:, None] > 0)
+    return T_rev, pi
+
+
 class wePCCA(weAnalysis):
     """
     PCCA+/MFPT analysis: builds a per-bin transition matrix from a
@@ -503,12 +532,12 @@ class wePCCA(weAnalysis):
         nonzero_rows_idx = np.where(tm_norm.sum(axis=1) != 0)[0]
         T_visited = tm_norm[np.ix_(nonzero_rows_idx, nonzero_rows_idx)]
 
-        # Symmetrize to enforce detailed balance -- required for a
-        # meaningful PCCA-style decomposition (kept from pcca_master.py).
-        T_sym = (T_visited + T_visited.T) / 2.0
-        rs = T_sym.sum(axis=1)
-        rs[rs == 0] = 1.0
-        T_sym = T_sym / rs[:, np.newaxis]
+        # Reversible (detailed-balance) estimate for a PCCA-style
+        # decomposition, by symmetrizing the stationary flux pi_i T_ij.
+        # The earlier (T + T^T) / 2 discarded pi (weighting every bin about
+        # equally) and, on the 8-gene Set I surveys, merged away the SC and
+        # LN2 phenotypes that this finds.
+        T_sym, _ = reversible_by_flux(T_visited)
 
         print(
             "  Running GPCCA+ with n_clusters={} on {} bins...".format(
