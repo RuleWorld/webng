@@ -113,6 +113,15 @@ pairwise, so no merge makes a walker heavier than the two it came from, and the
 survivor is chosen by weight. :code:`merge_log: true` writes every merge to
 :code:`merge_dists.tsv` in the simulation folder (for debugging).
 
+By default all walkers compete for the :code:`n_split` splits in one ranking. When a
+transition has two legs, walkers on the first leg (e.g. still in the start basin)
+may never win a split against walkers further along. :code:`split_bands` (ascending
+thresholds on :math:`S`) and :code:`split_fractions` (one share of :code:`n_split`
+per band, summing to 1) give each band its own budget, for example
+:code:`split_bands: [0.5]` with :code:`split_fractions: [0.3, 0.7]` reserves 30% of
+the splits for walkers with :math:`S < 0.5`. Within a band walkers are ranked as
+usual, and a band with too few walkers passes its unused splits on.
+
 .. _path_options:
 
 Path Options

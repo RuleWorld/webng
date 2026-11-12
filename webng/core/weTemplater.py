@@ -97,6 +97,8 @@ class weTemplater:
                 "local_merge": False,
                 "merge_pool": 4,
                 "merge_log": False,
+                "split_bands": None,
+                "split_fractions": None,
                 "block_size": 10
             }
         else:

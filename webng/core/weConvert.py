@@ -250,6 +250,11 @@ class weConvert:
                                  walkers by merge score; default 4 (at least 2)
           merge_log              write every merge to merge_dists.tsv (debugging);
                                  default false
+          split_bands            ascending progress thresholds that cut walkers into
+                                 bands, each with its own share of n_split; default
+                                 none (one ranking)
+          split_fractions        each band's share of n_split (len(split_bands) + 1
+                                 entries, summing to 1)
         """
         dims = self.dims
         self.n_walkers = self._getd(binning_options, "n_walkers", default=40)
@@ -268,6 +273,10 @@ class weConvert:
         self.local_merge = bool(self._getd(binning_options, "local_merge", default=False, required=False))
         self.merge_pool = int(self._getd(binning_options, "merge_pool", default=4, required=False))
         self.merge_log = bool(self._getd(binning_options, "merge_log", default=False, required=False))
+        bands = self._getd(binning_options, "split_bands", default=None, required=False)
+        fractions = self._getd(binning_options, "split_fractions", default=None, required=False)
+        self.split_bands = None if bands is None else [float(x) for x in bands]
+        self.split_fractions = None if fractions is None else [float(x) for x in fractions]
         self._check_mabl_opts()
 
     def _check_mabl_opts(self):
@@ -287,6 +296,18 @@ class weConvert:
             sys.exit("binning_options.merge_progress_floor must be >= 0")
         if self.merge_pool < 2:
             sys.exit("binning_options.merge_pool must be at least 2")
+        bands, fractions = getattr(self, "split_bands", None), getattr(self, "split_fractions", None)
+        if bands is not None or fractions is not None:
+            if not bands or fractions is None:
+                sys.exit("binning_options.split_bands and split_fractions go together "
+                         "(split_bands: thresholds, split_fractions: one share per band)")
+            if any(b2 <= b1 for b1, b2 in zip(bands, bands[1:])):
+                sys.exit("binning_options.split_bands must be ascending")
+            if len(fractions) != len(bands) + 1:
+                sys.exit("binning_options.split_fractions needs {} entries (one per band: "
+                         "len(split_bands) + 1), got {}".format(len(bands) + 1, len(fractions)))
+            if min(fractions) < 0 or abs(sum(fractions) - 1) > 1e-6:
+                sys.exit("binning_options.split_fractions must be >= 0 and sum to 1, got {}".format(fractions))
 
     def _validate_mabl_config(self):
         """
@@ -959,6 +980,11 @@ class weConvert:
             "",
             "# Walkers split per iteration (an equal number of pairwise merges follows).",
             "MABL_N_SPLIT = {}".format(self.n_split),
+            "",
+            "# Split budget by score band: thresholds on S, and each band's share of",
+            "# MABL_N_SPLIT (None: one ranking for all walkers).",
+            "MABL_SPLIT_BANDS = {}".format(getattr(self, "split_bands", None)),
+            "MABL_SPLIT_FRACTIONS = {}".format(getattr(self, "split_fractions", None)),
             "",
             "# Split any walker heavier than this factor x the average weight.",
             "MABL_WEIGHT_CAP_FACTOR = {}".format(self.weight_cap_factor),

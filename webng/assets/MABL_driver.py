@@ -15,7 +15,8 @@ Each iteration (after recycling walkers that reached the recycle region):
      i has come from MABL_START toward MABL_TARGET, each term in [0, 1],
      linear or (MABL_LOG_SCALE) in fold change.
   3. Splits: the MABL_N_SPLIT walkers with the highest S_i / -log(W_i) are
-     split in two.
+     split in two (optionally with the budget shared out over score bands,
+     MABL_SPLIT_BANDS).
   4. Merges: as many pairwise merges as walkers were added. Candidates are the
      walkers with the highest merge score 1 / (W_i * max(S_i, floor)), i.e.
      light and unpromising, except walkers created by a split in this
@@ -58,6 +59,15 @@ MABL_LOG_SCALE = [False, False]
 # Walkers split per iteration. Each split adds one walker; an equal number of
 # pairwise merges removes them again, so the walker count stays constant.
 MABL_N_SPLIT = 5
+
+# Split budget by score band. None: one ranking for all walkers. Otherwise ascending
+# thresholds on the progress S cut the walkers into len(bands) + 1 bands, and
+# MABL_SPLIT_FRACTIONS gives each band its share of MABL_N_SPLIT (summing to 1). Within
+# a band walkers are ranked as usual; a band with too few walkers passes its unused
+# splits to the best remaining walkers overall. Use it when one leg of the transition
+# (e.g. leaving the start basin) never wins splits against walkers further along.
+MABL_SPLIT_BANDS = None
+MABL_SPLIT_FRACTIONS = None
 
 # Weight cap: safety net only. Any walker heavier than this factor times the
 # average weight is split down.
@@ -273,6 +283,30 @@ class MABLDriver(WEDriver):
         log_weights = -1.0 * np.log(weights)
         return sum_progress * (1.0 / log_weights)
 
+    @staticmethod
+    def _band_quotas(n_split):
+        """Splits per score band: MABL_SPLIT_FRACTIONS x n_split, rounded so they sum to n_split."""
+        f = np.asarray(MABL_SPLIT_FRACTIONS, dtype=float)
+        raw = f / f.sum() * n_split
+        q = np.floor(raw).astype(int)
+        for i in np.argsort(-(raw - q))[:n_split - q.sum()]:
+            q[i] += 1
+        return q.tolist()
+
+    def _choose_splits(self, segments, split_scores, sum_progress):
+        """Indices of the walkers to split this iteration (never just-recycled ones)."""
+        order = [i for i in np.argsort(-split_scores) if segments[i].parent_id >= 0]
+        if not MABL_SPLIT_BANDS:
+            return order[:MABL_N_SPLIT]
+        band = np.searchsorted(np.asarray(MABL_SPLIT_BANDS, dtype=float), sum_progress, side='right')
+        chosen = []
+        for b, quota in enumerate(self._band_quotas(MABL_N_SPLIT)):
+            chosen += [i for i in order if band[i] == b][:quota]
+        if len(chosen) < MABL_N_SPLIT:
+            taken = set(chosen)
+            chosen += [i for i in order if i not in taken][:MABL_N_SPLIT - len(chosen)]
+        return chosen
+
     def _compute_ghost_scores(self, segments, sum_progress):
         """Merge (ghost) score = 1 / (W_i * max(S_i, MABL_MERGE_PROGRESS_FLOOR))"""
         weights = np.array([s.weight for s in segments])
@@ -389,13 +423,7 @@ class MABLDriver(WEDriver):
             # ----------------------------------------------------------
             split_scores = self._compute_split_scores(segments, sum_progress)
 
-            to_split_idx = []
-            for idx in np.argsort(-split_scores):
-                if len(to_split_idx) >= MABL_N_SPLIT:
-                    break
-                if segments[idx].parent_id < 0:
-                    continue
-                to_split_idx.append(idx)
+            to_split_idx = self._choose_splits(segments, split_scores, sum_progress)
 
             if to_split_idx:
                 self._split_by_data(bin, list(segments[to_split_idx]), 2)

@@ -30,7 +30,8 @@ def _load_driver(bare_weconvert, tmp_path, monkeypatch, **settings):
     opts = dict(start=[0.0, 0.0], target=[10.0, 10.0], coord_weights=[1, 1],
                 n_split=2, weight_cap_factor=10.0, recycle_region=None,
                 log_scale=[False, False], merge_progress_floor=0.01,
-                local_merge=False, merge_pool=4, merge_log=False)
+                local_merge=False, merge_pool=4, merge_log=False,
+                split_bands=None, split_fractions=None)
     opts.update(settings)
     monkeypatch.chdir(tmp_path)
     bare_weconvert(**opts)._write_mabl_driver()
@@ -354,3 +355,66 @@ def test_weight_cap_children_are_not_merged_back(bare_weconvert, tmp_path, monke
     d._run_we()
     merged = [w for group in d.merge_log for w in group]
     assert all(m in walkers for m in merged)          # only the original light walkers were merged
+
+
+# ---------------------------------------------------------------------------
+# Split budget by score band
+# ---------------------------------------------------------------------------
+
+def _banded(bare_weconvert, tmp_path, monkeypatch, **kw):
+    mod, Driver = _load_driver(bare_weconvert, tmp_path, monkeypatch, **kw)
+    return mod, _driver(Driver, _ensemble(2))
+
+
+def test_band_quotas_sum_to_n_split(bare_weconvert, tmp_path, monkeypatch):
+    mod, d = _banded(bare_weconvert, tmp_path, monkeypatch, split_bands=[0.5], split_fractions=[0.3, 0.7])
+    assert d._band_quotas(100) == [30, 70]
+    assert d._band_quotas(7) == [2, 5]
+    mod.MABL_SPLIT_FRACTIONS = [1 / 3, 1 / 3, 1 / 3]
+    assert sum(d._band_quotas(10)) == 10
+
+
+def _scored(n_low, n_high):
+    """Walkers in two score bands: low S (0.1-0.2) and high S (1.0-1.1), all equal weight."""
+    segs = [Walker(0.01, [[0, 0], [0, 0]]) for _ in range(n_low + n_high)]
+    S = np.r_[np.linspace(0.1, 0.2, n_low), np.linspace(1.0, 1.1, n_high)]
+    return np.array(segs, dtype=object), S, S / -np.log(0.01)
+
+
+def test_bands_give_each_band_its_share(bare_weconvert, tmp_path, monkeypatch):
+    _, d = _banded(bare_weconvert, tmp_path, monkeypatch, n_split=4, split_bands=[0.5], split_fractions=[0.5, 0.5])
+    segs, S, scores = _scored(5, 5)
+    chosen = d._choose_splits(segs, scores, S)
+    assert sorted(chosen) == [3, 4, 8, 9]          # the best two of each band
+    # without bands the high band takes every split
+    nobands = tmp_path / "nobands"
+    nobands.mkdir()
+    _, d1 = _banded(bare_weconvert, nobands, monkeypatch, n_split=4)
+    assert sorted(d1._choose_splits(segs, scores, S)) == [6, 7, 8, 9]
+
+
+def test_band_with_too_few_walkers_passes_its_splits_on(bare_weconvert, tmp_path, monkeypatch):
+    _, d = _banded(bare_weconvert, tmp_path, monkeypatch, n_split=4, split_bands=[0.5], split_fractions=[0.5, 0.5])
+    segs, S, scores = _scored(1, 6)
+    chosen = d._choose_splits(segs, scores, S)
+    assert len(chosen) == 4 and 0 in chosen and sorted(chosen)[1:] == [4, 5, 6]
+
+
+def test_banded_resampling_conserves_walkers_and_weight(bare_weconvert, tmp_path, monkeypatch):
+    _, Driver = _load_driver(bare_weconvert, tmp_path, monkeypatch, n_split=6,
+                             split_bands=[1.0], split_fractions=[0.5, 0.5])
+    d = _driver(Driver, _ensemble(40))
+    d._run_we()
+    assert _totals(d) == (40, pytest.approx(1.0)) and len(d.split_log) == 6
+
+
+def test_split_band_defaults_and_errors(bare_weconvert):
+    wc = _parsed(bare_weconvert)
+    assert wc.split_bands is None and wc.split_fractions is None
+    assert _parsed(bare_weconvert, split_bands=[0.5], split_fractions=[0.3, 0.7]).split_bands == [0.5]
+    for bad in [dict(split_bands=[0.5]), dict(split_fractions=[1.0]),
+                dict(split_bands=[0.5], split_fractions=[0.3, 0.6]),
+                dict(split_bands=[0.5], split_fractions=[0.3, 0.3, 0.4]),
+                dict(split_bands=[1.0, 0.5], split_fractions=[0.2, 0.3, 0.5])]:
+        with pytest.raises(SystemExit):
+            _parsed(bare_weconvert, **bad)
