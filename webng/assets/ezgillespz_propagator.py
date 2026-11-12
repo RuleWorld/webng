@@ -10,7 +10,6 @@ west.cfg, section west.ezgillespz:
     net_file:        ./bngl_conf/init.net
     init_time_step:  0
     final_time_step: <tau>
-    num_time_step:   <pcoord_length + 1>   # points per segment, both ends included
     device:          cpu       # cpu | gpu (CUDA or Metal, whichever this machine has) | cuda | metal
     kind:            compact   # ezgillespz engine; see ezgillespz.make_engine
     headroom_bits:   8         # fixed-point headroom above the largest total rate seen

@@ -54,7 +54,64 @@ Binning
 multicore runs, try to keep the blocksize an integer multiple of the number of cores you have. 
 :code:`center_freq` refers to how frequently voronoi bins will be placed, in units of WE 
 iterations. :code:`max_centers` is the maximum number of voronoi centers that will be placed.
-Finally, :code:`traj_per_bin` is the number of trajectories in each voronoi center. 
+Finally, :code:`traj_per_bin` is the number of trajectories in each voronoi center.
+
+.. _mabl:
+
+MABL
+^^^^
+
+With :code:`style: mabl` all walkers share one bin, and the driver
+(:code:`MABL_driver.py`, copied from :code:`webng/assets` with its settings block
+filled in) resamples by score. MABL always recycles: the :code:`recycling` block's
+:code:`recycle_region` is the target. Lists have one entry per progress coordinate,
+in :code:`pcoords` order.
+
+.. code-block:: yaml
+   :linenos:
+
+   binning_options:
+      style: mabl
+      n_walkers: 1000          # walkers, constant through the run
+      n_split: 100             # walkers split per iteration; as many pairwise merges follow
+      weight_cap_factor: 10.0  # split any walker heavier than this x the average weight
+      start: [100, 300, 3250, 100]
+      target: [1000, 300, 100, 3350]
+      coord_weights: [0, 0, 1, 1]
+      log_scale: [false, false, false, true]
+      merge_progress_floor: 0.01
+      local_merge: false
+      merge_pool: 4
+      merge_log: false
+
+Each iteration, after recycling, MABL computes every walker's progress
+:math:`S = \sum_d w_d\, p_d`, where :math:`w_d` is :code:`coord_weights` and
+:math:`p_d \in [0, 1]` measures how far coordinate :math:`d` has come from
+:code:`start` toward :code:`target`. With :code:`log_scale` false, :math:`p_d` is
+linear in the count (:math:`1 - |x - \mathrm{target}| / |\mathrm{start} - \mathrm{target}|`).
+With :code:`log_scale` true, it is the fold change
+(:math:`\log(x/\mathrm{start}) / \log(\mathrm{target}/\mathrm{start})`, which needs start
+and target > 0). The log scale is sensitive at low counts, so it suits a coordinate
+whose transition happens as it rises from a low start. Whether it helps is case by
+case (default false; a single true/false applies to every coordinate).
+
+The :code:`n_split` walkers with the highest :math:`S / -\log W` are split in two.
+Then as many pairwise merges remove the added walkers. Candidates are the walkers
+with the highest merge score :math:`1 / (W \max(S, \mathrm{floor}))`, light and
+unpromising, where the floor is :code:`merge_progress_floor`. Without the floor,
+walkers with zero progress would be merged first however heavy they are.
+Walkers created by a split in the same iteration are never merge candidates: a
+split's two children sit at the same point with equal weights, so they would pair
+up and undo the split.
+By default candidates are paired by merge-score rank.
+With :code:`local_merge: true`, each candidate is instead paired with its nearest
+neighbour (Euclidean distance in the progress coordinates). Partners come from the
+top :code:`merge_pool` :math:`\times` (merges per iteration) walkers by merge score,
+so a larger pool finds closer partners from lower in the ranking, and 2 merges
+exactly the top-ranked walkers. Merges are always
+pairwise, so no merge makes a walker heavier than the two it came from, and the
+survivor is chosen by weight. :code:`merge_log: true` writes every merge to
+:code:`merge_dists.tsv` in the simulation folder (for debugging).
 
 .. _path_options:
 

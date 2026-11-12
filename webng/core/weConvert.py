@@ -116,13 +116,7 @@ class weConvert:
             self.center_freq = self._getd(binning_options, "center_freq", default=1)
             self.max_centers = self._getd(binning_options, "max_centers", default=300)
         elif self.binning_style == "mabl":
-            self.n_walkers = self._getd(binning_options, "n_walkers", default=40)
-            self.n_split   = self._getd(binning_options, "n_split",   default=5)
-            self.weight_cap_factor = self._getd(binning_options, "weight_cap_factor", default=10.0)
-            self.start     = self._getd(binning_options, "start", default=[0]*self.dims)
-            self.target    = self._getd(binning_options, "target", default=[50]*self.dims)
-            self.block_size = self._getd(binning_options, "block_size", default=10)
-            self.coord_weights = self._getd(binning_options, "coord_weights", default=[1]*self.dims)
+            self._parse_mabl_opts(binning_options)
         else:
             self.boundaries   = self._getd(binning_options, "boundaries")
             self.traj_per_bin = self._getd(binning_options, "traj_per_bin", default=10)
@@ -238,6 +232,61 @@ class weConvert:
         with open(yfile, "r") as f:
             y = yaml.load(f, Loader=Loader)
         return y
+
+    def _parse_mabl_opts(self, binning_options):
+        """
+        binning_options for style: mabl. Lists are per progress coordinate,
+        in pcoord order:
+          n_walkers, n_split, weight_cap_factor, block_size
+          start, target          microstates used for scoring
+          coord_weights          importance weight per coordinate (0 = not scored)
+          log_scale              true: fold-change progress (start, target > 0);
+                                 a single true/false applies to every coordinate.
+                                 Default false.
+          merge_progress_floor   merge score = 1 / (W * max(S, floor)); default 0.01
+          local_merge            pair merge candidates with their nearest
+                                 neighbour instead of by rank; default false
+          merge_pool             local merging: candidates = merge_pool x n_merge
+                                 walkers by merge score; default 4 (at least 2)
+          merge_log              write every merge to merge_dists.tsv (debugging);
+                                 default false
+        """
+        dims = self.dims
+        self.n_walkers = self._getd(binning_options, "n_walkers", default=40)
+        self.n_split   = self._getd(binning_options, "n_split",   default=5)
+        self.weight_cap_factor = self._getd(binning_options, "weight_cap_factor", default=10.0)
+        self.start     = self._getd(binning_options, "start", default=[0]*dims)
+        self.target    = self._getd(binning_options, "target", default=[50]*dims)
+        self.block_size = self._getd(binning_options, "block_size", default=10)
+        self.coord_weights = self._getd(binning_options, "coord_weights", default=[1]*dims)
+        log_scale = self._getd(binning_options, "log_scale", default=False, required=False)
+        if log_scale is None or isinstance(log_scale, bool):
+            log_scale = [bool(log_scale)] * dims
+        self.log_scale = [bool(x) for x in log_scale]
+        self.merge_progress_floor = float(self._getd(
+            binning_options, "merge_progress_floor", default=0.01, required=False))
+        self.local_merge = bool(self._getd(binning_options, "local_merge", default=False, required=False))
+        self.merge_pool = int(self._getd(binning_options, "merge_pool", default=4, required=False))
+        self.merge_log = bool(self._getd(binning_options, "merge_log", default=False, required=False))
+        self._check_mabl_opts()
+
+    def _check_mabl_opts(self):
+        """Errors out (before any files are written) on inconsistent MABL options."""
+        for name in ("start", "target", "coord_weights", "log_scale"):
+            value = getattr(self, name)
+            if value is not None and len(value) != self.dims:
+                sys.exit("binning_options.{} has {} entries; it needs one per progress "
+                         "coordinate ({})".format(name, len(value), self.dims))
+        names = list(getattr(self, "pcoord_list", None) or [])
+        for d, use_log in enumerate(self.log_scale):
+            if use_log and not (self.start[d] > 0 and self.target[d] > 0 and self.start[d] != self.target[d]):
+                sys.exit("binning_options.log_scale is true for coordinate {} ({}), which needs "
+                         "start and target > 0 and different (got start {}, target {})".format(
+                             d, names[d] if d < len(names) else "-", self.start[d], self.target[d]))
+        if self.merge_progress_floor < 0:
+            sys.exit("binning_options.merge_progress_floor must be >= 0")
+        if self.merge_pool < 2:
+            sys.exit("binning_options.merge_pool must be at least 2")
 
     def _validate_mabl_config(self):
         """
@@ -887,321 +936,62 @@ class weConvert:
         self._copy_asset("restart_plugin.py")
 
 
-    def _write_mabl_driver(self):
-        """
-        Write MABL_driver.py into the simulation folder.
+    MABL_CONFIG_BEGIN = "# >>> MABL configuration"
+    MABL_CONFIG_END = "# <<< end MABL configuration"
 
-        Templated constants (from your webng config):
-        MABL_START             : start microstate per dimension
-        MABL_TARGET            : target microstate per dimension (used for scoring)
-        MABL_COORD_WEIGHTS     : per-dimension importance weights (weighted sum)
-        MABL_N_SPLIT           : walkers split per iteration (merges match it)
-        MABL_WEIGHT_CAP_FACTOR : split any walker heavier than this x the average
-        MABL_RECYCLE_REGION    : [min, max] per dimension box, or None to disable
-        """
-        lines = [
-            "import logging",
-            "import operator",
-            "import math",
-            "import numpy as np",
-            "from westpa.core.we_driver import WEDriver, NewWeightEntry",
-            "from westpa.core.segment import Segment",
+    def _mabl_config_block(self):
+        """The settings block of MABL_driver.py, from binning_options and recycling."""
+        names = list(getattr(self, "pcoord_list", None) or ["d%d" % i for i in range(self.dims)])
+        return "\n".join([
+            self.MABL_CONFIG_BEGIN + " (written by webng setup from binning_options and recycling)",
+            "# Progress coordinates, in order (west.cfg); the lists below follow this order.",
+            "MABL_PCOORDS = {!r}".format(names),
             "",
-            "log = logging.getLogger(__name__)",
-            "",
-            "# ---------------------------------------------------------------------------",
-            "# MABL configuration -- set by webng from binning_options and recycling.",
-            "# ---------------------------------------------------------------------------",
-            "",
-            "MABL_START  = {}".format(self.start),
+            "# Start and target microstate per coordinate (used for scoring only).",
+            "MABL_START = {}".format(self.start),
             "MABL_TARGET = {}".format(self.target),
             "",
-            "# Per-dimension importance weights. Zero excludes a dimension from scoring",
-            "# (e.g. a coordinate that doesn't change monotonically along the transition).",
+            "# Per-coordinate importance weights (0 = not scored).",
             "MABL_COORD_WEIGHTS = {}".format(self.coord_weights),
             "",
-            "# Number of walkers selected for MABL scoring-based splits per iteration.",
-            "# Each split adds one walker; an equal number of pairwise merges removes",
-            "# them again, so the walker count stays constant.",
+            "# Per-coordinate progress scale: False linear, True log (fold change).",
+            "MABL_LOG_SCALE = {}".format(self.log_scale),
+            "",
+            "# Walkers split per iteration (an equal number of pairwise merges follows).",
             "MABL_N_SPLIT = {}".format(self.n_split),
             "",
-            "# Weight cap: safety net only. Any walker heavier than this factor times the",
-            "# average weight is split down. With pairwise merging, no merge operation",
-            "# creates a heavy survivor, so this should rarely fire.",
+            "# Split any walker heavier than this factor x the average weight.",
             "MABL_WEIGHT_CAP_FACTOR = {}".format(self.weight_cap_factor),
             "",
-            "# Recycling region: [min, max] per dimension, in pcoord order. None disables",
-            "# that bound; None for the whole region disables recycling.",
+            "# Merge score = 1 / (W * max(S, floor)).",
+            "MABL_MERGE_PROGRESS_FLOOR = {}".format(self.merge_progress_floor),
+            "",
+            "# Local merging: pair candidates with their nearest neighbour among the",
+            "# top MABL_MERGE_POOL x n_merge walkers by merge score.",
+            "MABL_LOCAL_MERGE = {}".format(self.local_merge),
+            "MABL_MERGE_POOL = {}".format(self.merge_pool),
+            "",
+            "# Debugging: log every pairwise merge to merge_dists.tsv.",
+            "MABL_MERGE_LOG = {}".format(self.merge_log),
+            "",
+            "# Recycling region: [min, max] per coordinate, in pcoord order; None = no bound.",
             "MABL_RECYCLE_REGION = {}".format(self.recycle_region),
-            "",
-            "# ---------------------------------------------------------------------------",
-            "",
-            "",
-            "class MABLDriver(WEDriver):",
-            "",
-            "    def _in_recycle_region(self, pcoord_frame):",
-            "        if MABL_RECYCLE_REGION is None:",
-            "            return False",
-            "        for d, (lo, hi) in enumerate(MABL_RECYCLE_REGION):",
-            "            val = pcoord_frame[d]",
-            "            if lo is not None and val < lo:",
-            "                return False",
-            "            if hi is not None and val > hi:",
-            "                return False",
-            "        return True",
-            "",
-            "    def _recycle_walkers(self):",
-            "        \"\"\"",
-            "        Recycle walkers that have reached the target macrostate back to",
-            "        basis states, recording NewWeightEntry for each so w_fluxanl",
-            "        correctly accounts for probability flux into the target.",
-            "        \"\"\"",
-            "        self.new_weights = []",
-            "        if MABL_RECYCLE_REGION is None:",
-            "            return",
-            "        if not self.target_states or not hasattr(self, '_parent_map'):",
-            "            return",
-            "",
-            "        target_state    = next(iter(self.target_states.values()))",
-            "        istateiter      = iter(self.avail_initial_states.values())",
-            "        used_istate_ids = set()",
-            "        n_recycled      = 0",
-            "        recycled_weight = 0.0",
-            "",
-            "        for bin in self.next_iter_binning:",
-            "            for segment in set(bin):",
-            "                if not self._in_recycle_region(segment.pcoord[0]):",
-            "                    continue",
-            "                parent = self._parent_map[segment.parent_id]",
-            "                parent.endpoint_type = Segment.SEG_ENDPOINT_RECYCLED",
-            "                try:",
-            "                    initial_state = next(istateiter)",
-            "                except StopIteration:",
-            "                    raise RuntimeError(",
-            "                        'MABL recycling: ran out of available initial states. '",
-            "                        'Increase --segs-per-state in init.sh or reduce walkers.'",
-            "                    )",
-            "                istate_assignment = self.bin_mapper.assign([initial_state.pcoord])[0]",
-            "                segment.parent_id = -(initial_state.state_id + 1)",
-            "                segment.pcoord[0] = initial_state.pcoord",
-            "                self.new_weights.append(",
-            "                    NewWeightEntry(",
-            "                        source_type       = NewWeightEntry.NW_SOURCE_RECYCLED,",
-            "                        weight            = parent.weight,",
-            "                        prev_seg_id       = parent.seg_id,",
-            "                        prev_init_pcoord  = parent.pcoord[0].copy(),",
-            "                        prev_final_pcoord = parent.pcoord[-1].copy(),",
-            "                        new_init_pcoord   = initial_state.pcoord.copy(),",
-            "                        target_state_id   = target_state.state_id,",
-            "                        initial_state_id  = initial_state.state_id,",
-            "                    )",
-            "                )",
-            "                bin.remove(segment)",
-            "                self.next_iter_binning[istate_assignment].add(segment)",
-            "                initial_state.iter_used = segment.n_iter",
-            "                used_istate_ids.add(initial_state.state_id)",
-            "                n_recycled      += 1",
-            "                recycled_weight += parent.weight",
-            "",
-            "        for state_id in used_istate_ids:",
-            "            self.used_initial_states[state_id] = \\",
-            "                self.avail_initial_states.pop(state_id)",
-            "        log.info('Recycled %d walkers, total weight = %.4e',",
-            "                 n_recycled, recycled_weight)",
-            "",
-            "    @property",
-            "    def n_istates_needed(self):",
-            "        if self.final_binning is None or MABL_RECYCLE_REGION is None:",
-            "            return 0",
-            "        n_will_recycle = sum(",
-            "            1 for b in self.final_binning",
-            "            for seg in b",
-            "            if self._in_recycle_region(seg.pcoord[-1])",
-            "        )",
-            "        return max(0, n_will_recycle - len(self.avail_initial_states))",
-            "",
-            "    def _split_by_data(self, bin, to_split, split_into):",
-            "        for segment in to_split:",
-            "            bin.remove(segment)",
-            "            bin.update(self._split_walker(segment, split_into, bin))",
-            "",
-            "    def _merge_pair(self, bin, seg_a, seg_b):",
-            "        \"\"\"",
-            "        Merge exactly two walkers into one survivor.",
-            "",
-            "        Consistent with standard WESTPA's pairwise merge strategy",
-            "        (_adjust_count), which always merges pairs rather than N-into-1.",
-            "        The survivor is chosen by weighted random selection within",
-            "        _merge_walkers, satisfying Rule 2 of statistically unbiased WE",
-            "        resampling (Huber & Kim 1996): the surviving trajectory must be",
-            "        chosen according to its weight.",
-            "",
-            "        Maximum weight of any survivor: W_a + W_b. With ghost-score",
-            "        selection both parents are near-zero weight, so no merge creates a",
-            "        heavy survivor that could dominate the ensemble after recycling.",
-            "        \"\"\"",
-            "        bin.discard(seg_a)",
-            "        bin.discard(seg_b)",
-            "        new_segment, parent = self._merge_walkers([seg_a, seg_b], None, bin)",
-            "        bin.add(new_segment)",
-            "",
-            "    def _rebuild(self, bin):",
-            "        \"\"\"Rebuild segments and pcoord arrays from bin after any split/merge.\"\"\"",
-            "        segments = np.array(",
-            "            sorted(bin, key=operator.attrgetter('weight')),",
-            "            dtype=np.object_",
-            "        )",
-            "        all_pcoords = np.array([s.pcoord for s in segments])",
-            "        return segments, all_pcoords",
-            "",
-            "    def _compute_progress(self, all_pcoords, ndims):",
-            "        \"\"\"",
-            "        Weighted sum progress toward target.",
-            "",
-            "        p_d = max(0, 1 - |x_d - target_d| / span_d)",
-            "        S_i = sum_d( w_d * p_d )",
-            "        \"\"\"",
-            "        nsegs = all_pcoords.shape[0]",
-            "        progresses = np.zeros((nsegs, ndims), dtype=float)",
-            "        for d in range(ndims):",
-            "            span = abs(MABL_START[d] - MABL_TARGET[d])",
-            "            if span == 0:",
-            "                progresses[:, d] = 1.0",
-            "                continue",
-            "            for i in range(nsegs):",
-            "                dist = abs(all_pcoords[i, 0, d] - MABL_TARGET[d]) / span",
-            "                progresses[i, d] = max(0.0, 1.0 - dist)",
-            "        coord_weights = np.array(MABL_COORD_WEIGHTS, dtype=float)",
-            "        return np.sum(progresses * coord_weights, axis=1)",
-            "",
-            "    def _compute_split_scores(self, segments, sum_progress):",
-            "        \"\"\"Split score = S_i * (1 / -log(W_i))\"\"\"",
-            "        weights     = np.array([s.weight for s in segments])",
-            "        log_weights = -1.0 * np.log(weights)",
-            "        return sum_progress * (1.0 / log_weights)",
-            "",
-            "    def _compute_ghost_scores(self, segments, sum_progress):",
-            "        \"\"\"Ghost score = 1 / (W_i * (S_i + eps))\"\"\"",
-            "        eps     = 1e-300",
-            "        weights = np.array([s.weight for s in segments])",
-            "        return 1.0 / (weights * (sum_progress + eps))",
-            "",
-            "    def _is_initialization(self):",
-            "        \"\"\"",
-            "        True when no current walker has moved yet, i.e. this resampling call",
-            "        comes from w_init's populate_initial, before any propagation. Checks",
-            "        every pcoord dimension: a walker has moved if any coordinate differs",
-            "        between its first and last frame.",
-            "        \"\"\"",
-            "        pcoords = np.array([s.pcoord for s in self.current_iter_segments])",
-            "        return not np.any(pcoords[:, 0, :] != pcoords[:, -1, :])",
-            "",
-            "    def _run_we(self):",
-            "        self.new_weights = self.new_weights or []",
-            "        self._recycle_walkers()",
-            "        self._check_pre()",
-            "",
-            "        for bin in self.next_iter_binning:",
-            "            if len(bin) == 0:",
-            "                continue",
-            "",
-            "            segments, all_pcoords = self._rebuild(bin)",
-            "            nsegs, nframes, ndims = all_pcoords.shape",
-            "",
-            "            # Skip resampling on the initialization iteration",
-            "            if self._is_initialization():",
-            "                continue",
-            "",
-            "            # ----------------------------------------------------------",
-            "            # STEP 1: Weight cap (safety net)",
-            "            # ----------------------------------------------------------",
-            "            target_weight = 1.0 / nsegs",
-            "            max_weight    = MABL_WEIGHT_CAP_FACTOR * target_weight",
-            "            n_cap_extra   = 0",
-            "",
-            "            weights    = np.array([s.weight for s in segments])",
-            "            cap_needed = np.where(weights > max_weight)[0]",
-            "",
-            "            if len(cap_needed) > 0:",
-            "                for idx in cap_needed:",
-            "                    seg        = segments[idx]",
-            "                    n_children = math.ceil(seg.weight / max_weight)",
-            "                    bin.remove(seg)",
-            "                    bin.update(self._split_walker(seg, n_children, bin))",
-            "                    n_cap_extra += n_children - 1",
-            "                    log.warning('cap: w=%.4e -> %d children',",
-            "                                seg.weight, n_children)",
-            "                segments, all_pcoords = self._rebuild(bin)",
-            "                nsegs = len(segments)",
-            "                log.warning('cap: %d walkers capped, %d extra, total=%d',",
-            "                            len(cap_needed), n_cap_extra, nsegs)",
-            "",
-            "            # ----------------------------------------------------------",
-            "            # STEP 2: Compute weighted sum progress S_i",
-            "            # ----------------------------------------------------------",
-            "            sum_progress = self._compute_progress(all_pcoords, ndims)",
-            "",
-            "            # ----------------------------------------------------------",
-            "            # STEP 3: MABL splits",
-            "            # ----------------------------------------------------------",
-            "            split_scores = self._compute_split_scores(segments, sum_progress)",
-            "",
-            "            to_split_idx = []",
-            "            for idx in np.argsort(-split_scores):",
-            "                if len(to_split_idx) >= MABL_N_SPLIT:",
-            "                    break",
-            "                if segments[idx].parent_id < 0:",
-            "                    continue",
-            "                to_split_idx.append(idx)",
-            "",
-            "            if to_split_idx:",
-            "                self._split_by_data(bin, list(segments[to_split_idx]), 2)",
-            "",
-            "            # Rebuild and recompute after splits",
-            "            segments, all_pcoords = self._rebuild(bin)",
-            "            nsegs        = len(segments)",
-            "            sum_progress = self._compute_progress(all_pcoords, ndims)",
-            "",
-            "            # ----------------------------------------------------------",
-            "            # STEP 4: Pairwise ghost-score-based merging",
-            "            # ----------------------------------------------------------",
-            "            ghost_scores   = self._compute_ghost_scores(segments, sum_progress)",
-            "            n_mabl_extra   = len(to_split_idx)",
-            "            ACTUAL_N_MERGE = n_cap_extra + n_mabl_extra",
-            "",
-            "            selected_for_merge = []",
-            "            for idx in np.argsort(-ghost_scores):",
-            "                if len(selected_for_merge) >= ACTUAL_N_MERGE * 2:",
-            "                    break",
-            "                if segments[idx].parent_id < 0:",
-            "                    continue",
-            "                selected_for_merge.append(segments[idx])",
-            "",
-            "            # Merge in pairs. With an odd count (fewer mergeable walkers than",
-            "            # needed), the last three merge into one instead, so no walker is",
-            "            # left unpaired -- and no walker is merged twice, which would count",
-            "            # its weight twice.",
-            "            n_selected = len(selected_for_merge)",
-            "            if n_selected % 2 == 1 and n_selected >= 3:",
-            "                n_pairs, last_three = (n_selected - 3) // 2, selected_for_merge[-3:]",
-            "            else:",
-            "                n_pairs, last_three = n_selected // 2, None",
-            "            for i in range(n_pairs):",
-            "                self._merge_pair(bin,",
-            "                                 selected_for_merge[i * 2],",
-            "                                 selected_for_merge[i * 2 + 1])",
-            "            if last_three is not None:",
-            "                bin.difference_update(last_three)",
-            "                new_segment, _ = self._merge_walkers(last_three, None, bin)",
-            "                bin.add(new_segment)",
-            "",
-            "        self._check_post()",
-            "        log.debug('used initial states: {!r}'.format(self.used_initial_states))",
-            "        log.debug('available initial states: {!r}'.format(self.avail_initial_states))",
-        ]
-        full_text = "\n".join(lines)
+            self.MABL_CONFIG_END,
+        ])
+
+    def _write_mabl_driver(self):
+        """
+        MABL_driver.py: webng/assets/MABL_driver.py with its configuration
+        block (between the MABL_CONFIG_BEGIN and MABL_CONFIG_END lines)
+        replaced by this config's settings (_mabl_config_block). Everything
+        else is the asset as it is.
+        """
+        with open(os.path.join(self._assets_dir(), "MABL_driver.py")) as f:
+            text = f.read()
+        i = text.index(self.MABL_CONFIG_BEGIN)
+        j = text.index(self.MABL_CONFIG_END, i) + len(self.MABL_CONFIG_END)
         with open("MABL_driver.py", "w") as f:
-            f.write(full_text)
+            f.write(text[:i] + self._mabl_config_block() + text[j:])
 
     def _write_runsh(self):
         """

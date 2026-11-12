@@ -92,6 +92,11 @@ class weTemplater:
                 "start": None,
                 "target": None,
                 "coord_weights": None,
+                "log_scale": None,
+                "merge_progress_floor": 0.01,
+                "local_merge": False,
+                "merge_pool": 4,
+                "merge_log": False,
                 "block_size": 10
             }
         else:
@@ -212,6 +217,7 @@ class weTemplater:
             self.template_dict["binning_options"]["start"] = [0] * ndims
             self.template_dict["binning_options"]["target"] = [50] * ndims
             self.template_dict["binning_options"]["coord_weights"] = [1] * ndims
+            self.template_dict["binning_options"]["log_scale"] = [False] * ndims
             self.do_target = True
 
         if self.do_target:
